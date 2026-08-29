@@ -13,7 +13,7 @@ endif()
 
 # 프로젝트 이름은 최종 출력 파일 이름으로 사용된다.
 #
-set(PRJ_NAME weact-h750-boot)
+set(PRJ_NAME weact-h750-fw)
 
 
 project(${PRJ_NAME}

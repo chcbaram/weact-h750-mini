@@ -22,7 +22,7 @@ WeAct STM32H750 Mini 용 부트로더. 앱은 외부 QSPI 플래시에서 XiP �
 | [10-uf2.md](10-uf2.md) | UF2 파싱, FAT 가상 디스크, family ID |
 | [11-boot-ui.md](11-boot-ui.md) | LCD 진행률 UI |
 | [12-app-xip.md](12-app-xip.md) | **앱(XiP) 쪽 규약.** 부트로더가 넘기는 상태, 앱 금지사항 |
-| 13-tooling.md | openocd + stmqspi, uf2conv, VSCode 태스크 |
+| [13-tooling.md](13-tooling.md) | **openocd + stmqspi, VSCode 태스크/런처.** SRST 안 되는 이유, 비상구 |
 | 14-test.md | 호스트/타깃 테스트 |
 | 15-arduino-core.md | 아두이노 variant, VTOR 함정, 업로드 툴 |
 | [16-roadmap.md](16-roadmap.md) | 남은 설계와 결정 근거 |

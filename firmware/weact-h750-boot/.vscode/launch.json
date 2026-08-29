@@ -1,0 +1,73 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug boot (openocd)",
+      "cwd": "${workspaceFolder}",
+      "executable": "./build/weact-h750-boot.elf",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "searchDir": ["${workspaceFolder}"],
+      "configFiles": ["tools/openocd/weact-h750.cfg"],
+      "runToEntryPoint": "main",
+      "preLaunchTask": "Build - build",
+      "showDevDebugOutput": "none",
+      "svdFile": "/opt/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd",
+      "//": "부트로더를 굽고 main 에서 멈춘다. 내부 플래시만 건드리므로 QSPI 의 앱은 보존된다."
+    },
+    {
+      "name": "Attach boot (openocd)",
+      "cwd": "${workspaceFolder}",
+      "executable": "./build/weact-h750-boot.elf",
+      "request": "attach",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "searchDir": ["${workspaceFolder}"],
+      "configFiles": ["tools/openocd/weact-h750.cfg"],
+      "showDevDebugOutput": "none",
+      "svdFile": "/opt/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd",
+      "//": "돌고 있는 부트로더에 붙는다. 다시 굽지 않는다. 부팅 루프를 잡을 때 유용하다."
+    },
+    {
+      "name": "Attach app (XiP, openocd)",
+      "cwd": "${workspaceFolder}/../weact-h750-fw",
+      "executable": "${workspaceFolder}/../weact-h750-fw/build/weact-h750-fw.elf",
+      "request": "attach",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "searchDir": ["${workspaceFolder}"],
+      "configFiles": ["tools/openocd/weact-h750.cfg"],
+      "showDevDebugOutput": "none",
+      "svdFile": "/opt/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd",
+      "//": [
+        "부트로더가 점프한 뒤의 앱을 디버깅한다. 앱은 QSPI 0x90001000 에서 XiP 로 돈다.",
+        "하드웨어 브레이크포인트만 쓸 수 있다 - QSPI 는 memory-mapped 읽기 전용이라",
+        "gdb 가 소프트 브레이크포인트(BKPT 명령어 삽입)를 심을 수 없다. Cortex-M7 은 8개뿐이다."
+      ]
+    },
+    {
+      "name": "Debug boot (ST-LINK GDB server)",
+      "cwd": "${workspaceFolder}",
+      "executable": "./build/weact-h750-boot.elf",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "stlink",
+      "serverArgs": ["-m", "1"],
+      "runToEntryPoint": "main",
+      "preLaunchTask": "Build - build",
+      "showDevDebugOutput": "none",
+      "osx": {
+        "serverpath": "/opt/ST/STM32CubeCLT_1.21.0/STLink-gdb-server/bin/ST-LINK_gdbserver",
+        "stm32cubeprogrammer": "/opt/ST/STM32CubeCLT_1.21.0/STM32CubeProgrammer/bin",
+        "svdFile": "/opt/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd"
+      },
+      "windows": {
+        "serverpath": "C:/ST/STM32CubeCLT_1.21.0/STLink-gdb-server/bin/ST-LINK_gdbserver.exe",
+        "stm32cubeprogrammer": "C:/ST/STM32CubeCLT_1.21.0/STM32CubeProgrammer/bin",
+        "svdFile": "C:/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd"
+      },
+      "//": "openocd 가 안 될 때의 대안. CLT 1.22 는 이 macOS 에서 실행되지 않으므로 1.21.0 으로 고정한다."
+    }
+  ]
+}

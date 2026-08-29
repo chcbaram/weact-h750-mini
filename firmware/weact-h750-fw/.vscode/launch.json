@@ -1,0 +1,57 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach app (XiP, openocd)",
+      "cwd": "${workspaceFolder}",
+      "executable": "./build/weact-h750-fw.elf",
+      "request": "attach",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "searchDir": ["${workspaceFolder}"],
+      "configFiles": ["tools/openocd/weact-h750.cfg"],
+      "showDevDebugOutput": "none",
+      "svdFile": "/opt/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd",
+      "//": [
+        "앱 디버깅의 기본 경로다. 부트로더가 이미 QSPI 를 memory-mapped 로 열고 점프한",
+        "상태에 붙는다. 앱을 굽지 않으므로 'Flash - ...' 태스크로 먼저 올려둘 것.",
+        "하드웨어 브레이크포인트만 쓸 수 있다 - QSPI 는 memory-mapped 읽기 전용이라",
+        "gdb 가 소프트 브레이크포인트(BKPT 명령어 삽입)를 심을 수 없다. Cortex-M7 은 8개뿐이다."
+      ]
+    },
+    {
+      "name": "Debug app (SWD 로 굽고 시작)",
+      "cwd": "${workspaceFolder}",
+      "executable": "./build/weact-h750-fw.elf",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "searchDir": ["${workspaceFolder}"],
+      "configFiles": ["tools/openocd/weact-h750-qspi.cfg"],
+      "loadFiles": ["./build/weact-h750-fw.bin"],
+      "preLaunchTask": "Build - build",
+      "showDevDebugOutput": "none",
+      "svdFile": "/opt/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd",
+      "//": [
+        "stmqspi 로 QSPI 에 직접 굽고 디버깅을 시작한다. 부트로더가 없어도 되는 경로.",
+        "runToEntryPoint 를 쓰지 않는 것에 주의 - 리셋 직후에는 부트로더가 먼저 돌고,",
+        "그 부트로더가 QSPI 를 memory-mapped 로 열어줘야 앱 코드를 인출할 수 있다.",
+        "loadFiles 는 .elf 가 아니라 .bin 이다. .elf 로 하면 openocd 가 LMA 를 보고",
+        "내부 플래시 뱅크로 보내려 한다."
+      ]
+    },
+    {
+      "name": "Attach boot (openocd)",
+      "cwd": "${workspaceFolder}/../weact-h750-boot",
+      "executable": "${workspaceFolder}/../weact-h750-boot/build/weact-h750-boot.elf",
+      "request": "attach",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "searchDir": ["${workspaceFolder}"],
+      "configFiles": ["tools/openocd/weact-h750.cfg"],
+      "showDevDebugOutput": "none",
+      "svdFile": "/opt/ST/STM32CubeCLT_1.21.0/STMicroelectronics_CMSIS_SVD/STM32H750.svd",
+      "//": "앱이 점프 전에 죽었을 때 부트로더 쪽을 본다."
+    }
+  ]
+}

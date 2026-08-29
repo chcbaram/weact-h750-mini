@@ -1,0 +1,140 @@
+{
+  "version": "2.0.0",
+  "options": {
+    "env": {
+      // 이 머신(macOS 12.7.6)에서는 CubeCLT 1.22 가 실행되지 않는다(Qt 가 macOS 13 이상 요구).
+      // SVD 와 ST-LINK gdbserver 는 1.21.0 에서 가져온다.
+      "CUBECLT": "/opt/ST/STM32CubeCLT_1.21.0",
+      // SWD 는 openocd 하나로 통일한다.
+      //   STM32_Programmer_CLI : macOS 12 에서 실행 불가
+      //   pyocd                : 바이너리는 있으나 파이썬 모듈이 없다
+      "OOCD": "openocd -f tools/openocd/weact-h750.cfg",
+      "OOCD_QSPI": "openocd -f tools/openocd/weact-h750-qspi.cfg"
+    }
+  },
+  "tasks": [
+    {
+      "label": "Build - build",
+      "type": "shell",
+      "detail": "부트로더 빌드. build/ 는 반드시 프로젝트 루트 바로 아래여야 한다(링커 옵션이 -T../src/... 상대경로다).",
+      "command": "cmake -S . -B build && cmake --build build -j8",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Build - clean",
+      "type": "shell",
+      "command": "cmake --build build --target clean",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build - rebuild",
+      "type": "shell",
+      "command": "rm -rf build && cmake -S . -B build && cmake --build build -j8",
+      "problemMatcher": ["$gcc"]
+    },
+
+    {
+      "label": "Flash - boot (openocd)",
+      "type": "shell",
+      "detail": "부트로더를 내부 플래시 0x08000000 에 굽는다. QSPI 의 앱과 태그는 보존된다.",
+      "command": "${env:OOCD} -c 'program build/weact-h750-boot.elf verify reset exit'",
+      "dependsOn": "Build - build",
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Device - reset",
+      "type": "shell",
+      "detail": "SYSRESETREQ 소프트 리셋. 백업 도메인(RTC 레지스터)은 보존된다.",
+      "command": "${env:OOCD} -c 'init' -c 'reset run' -c 'shutdown'",
+      "problemMatcher": []
+    },
+    {
+      "label": "Device - 부트 모드로 강제 진입",
+      "type": "shell",
+      "detail": "리셋 더블탭이 안 될 때 쓰는 비상구. RTC 백업 DR3 에 MODE_BIT_BOOT|MODE_BIT_MSC 를 직접 써넣고 리셋한다. 나쁜 이미지로 부팅 루프에 빠졌을 때 이걸로 빠져나온다.",
+      "command": "${env:OOCD} -c 'init' -c 'halt' -c 'mww 0x5800405C 0x00000003' -c 'reset run' -c 'shutdown'",
+      "problemMatcher": []
+    },
+    {
+      "label": "Device - 폴트 레지스터 덤프",
+      "type": "shell",
+      "detail": "stm32h7xx_it.c 가 .noinit 에 남긴 CFSR/HFSR/MMFAR/BFAR 을 읽는다. 리셋해도 살아남는다.",
+      "command": "${env:OOCD} -c 'init' -c 'halt' -c 'mdw 0x20000000 8' -c 'resume' -c 'shutdown'",
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Log - 부팅 로그 (SWD)",
+      "type": "shell",
+      "detail": "UART 없이 RAM 링버퍼를 SWD 로 덤프한다. logBoot(false) 전까지의 로그.",
+      "command": "tools/swd/swdlog.sh boot",
+      "problemMatcher": []
+    },
+    {
+      "label": "Log - 전체 로그 (SWD)",
+      "type": "shell",
+      "command": "tools/swd/swdlog.sh list",
+      "problemMatcher": []
+    },
+
+    {
+      "label": "QSPI - 정보",
+      "type": "shell",
+      "detail": "JEDEC ID 와 용량, 그리고 태그/앱 벡터 테이블을 읽는다. 정상이면 TAG 매직과 MSP=0x24080000 이 보인다.",
+      "command": "${env:OOCD_QSPI} -c 'init' -c 'reset init' -c 'flash info 1' -c 'mdw 0x90000000 4' -c 'mdw 0x90001000 4' -c 'shutdown'",
+      "problemMatcher": []
+    },
+    {
+      "label": "QSPI - 태그 무효화",
+      "type": "shell",
+      "detail": "태그 섹터만 지운다. 앱 본체는 그대로 두고 부트로더가 2단계(VER)로 떨어지는지 시험할 때 쓴다. openocd 의 stmqspi 는 64KB 단위로만 지우므로 앱의 앞 60KB 도 함께 날아간다 - 앱을 다시 구워야 한다.",
+      "command": "${env:OOCD_QSPI} -c 'init' -c 'reset init' -c 'flash erase_address 0x90000000 0x10000' -c 'reset run' -c 'shutdown'",
+      "problemMatcher": []
+    },
+    {
+      "label": "QSPI - 전체 소거",
+      "type": "shell",
+      "detail": "8MB 전체 소거. 앱과 태그가 모두 사라지고 부트로더만 남는다.",
+      "command": "${env:OOCD_QSPI} -c 'init' -c 'reset init' -c 'flash erase_sector 1 0 last' -c 'reset run' -c 'shutdown'",
+      "problemMatcher": []
+    },
+
+    {
+      "label": "App - build + uf2",
+      "type": "shell",
+      "detail": "앱을 빌드한다. .bin 과 .uf2 가 함께 나온다.",
+      "command": "cd ../weact-h750-fw && cmake -S . -B build && cmake --build build -j8 && ls -l build/*.bin build/*.uf2",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "App - flash via UF2",
+      "type": "shell",
+      "detail": "리셋 더블탭으로 부트 모드에 들어간 뒤 H750BOOT 드라이브에 복사한다. 부트로더가 태그까지 써준다.",
+      "command": "cp ../weact-h750-fw/build/*.uf2 /Volumes/H750BOOT/ && echo '복사 완료. 부트로더가 적용 후 재부팅한다.'",
+      "problemMatcher": []
+    },
+    {
+      "label": "App - flash via CDC",
+      "type": "shell",
+      "detail": "cmd 프로토콜로 굽는다. HID(39.6 KB/s)보다 훨씬 빠르다(295 KB/s).",
+      "command": "python3 tools/download/download.py ../weact-h750-fw/build/weact-h750-fw.bin",
+      "problemMatcher": []
+    },
+    {
+      "label": "App - flash via HID",
+      "type": "shell",
+      "detail": "시리얼 포트 이름에 의존하지 않는 경로. 리눅스는 udev 룰이 필요하다.",
+      "command": "python3 tools/download/download.py --hid ../weact-h750-fw/build/weact-h750-fw.bin",
+      "problemMatcher": []
+    },
+    {
+      "label": "App - flash via SWD (openocd stmqspi)",
+      "type": "shell",
+      "detail": "부트로더를 거치지 않고 QSPI 에 직접 굽는 복구 경로. 태그를 쓰지 않으므로 부트로더가 2단계(VER)로 판정해 첫 부팅에서 태그를 만들어 준다.",
+      "command": "${env:OOCD_QSPI} -c 'init' -c 'reset init' -c 'program ../weact-h750-fw/build/weact-h750-fw.bin 0x90001000 verify' -c 'reset run' -c 'shutdown'",
+      "problemMatcher": []
+    }
+  ]
+}

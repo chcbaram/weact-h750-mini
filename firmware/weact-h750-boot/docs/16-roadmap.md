@@ -37,14 +37,14 @@
 8. **`SystemClock_Config`** — PLL1 을 설정해야 한다 (12 문서).
    `RCC_PERIPHCLK_QSPI` 와 `RCC_PERIPHCLK_RTC` 는 넣지 말 것.
 
-## 10단계 — 툴링
+## 10단계 — 툴링  **[완료]**
 
-- `.vscode/tasks.json` 을 openocd 기준으로 재작성
-  (`Build`, `Flash - boot (openocd)`, `Flash - fw via CDC/HID`, `Device - reset`)
-- `.vscode/launch.json` : `cortex-debug` + openocd.
-  ST-LINK gdbserver 를 쓰려면 CubeCLT **1.21.0** 으로 고정 (1.22 는 이 macOS 에서 실행 불가)
-- `openocd stmqspi` 로 QSPI 직접 굽기 — 아두이노 세션이 시험해 보기로 함
-- 호스트 업로드 툴 : **Go + CDC** 권장 (CGO 불필요, 295 KB/s. HID 는 39.6 KB/s)
+`.vscode/tasks.json` / `launch.json` 과 `tools/openocd/*.cfg` 를 두 프로젝트 모두에
+넣었다. 실기 검증까지 마쳤다. 상세는 **13 문서**.
+
+남은 것:
+- 호스트 업로드 툴 : **Go + CDC** 권장 (CGO 불필요, 295 KB/s. HID 는 39.6 KB/s).
+  아두이노 세션이 `baramdl` 로 진행 중
 
 ## 11단계 — 아두이노 코어 (별도 저장소, 다른 세션이 진행)
 
