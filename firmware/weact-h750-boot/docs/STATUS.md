@@ -246,22 +246,35 @@ CFSR 해석: bit0 IACCVIOL(명령어 접근 위반), bit1 DACCVIOL, bit16 UNDEFI
 11. **RTC 클럭 재선택 = 백업 도메인 리셋** (12 문서)
 12. **SWD 의 SRST 가 안 먹는다** — MAX809 수퍼바이저. `reset_config none` (13 문서)
 13. **openocd stmqspi 소거 단위는 64KB** — 태그 4KB 만 지우는 건 불가능 (13 문서)
-14. **`tr`/`sed` 에 `LC_ALL=C`** — 로그에 non-UTF8 바이트가 섞이면 macOS 의 tr 이
+14. **openocd `connect_assert_srst` 는 더블탭이 된다** — SRST 를 걸면 `PINRSTF` 가
+    서고, 짧은 간격 2회면 부트로더가 잔류한다. 우리 cfg 는 `reset_config none` 이라
+    해당 없다 (13 문서)
+15. **HAL `SD_PowerON()` 의 CMD8 판정 버그** — 카드 무응답을 못 걸러낸다 (16 문서)
+16. **`tr`/`sed` 에 `LC_ALL=C`** — 로그에 non-UTF8 바이트가 섞이면 macOS 의 tr 이
     "Illegal byte sequence" 로 죽어 **그 지점부터 로그가 통째로 잘린다**.
     폴트 로그의 초기화 안 된 `.noinit` 필드에서 실제로 겪었다 (`swdlog.sh`)
 
 ## 남은 확인 (물리 조작 필요)
 
-1. **BOOT0(SW1) + NRST 로 ROM DFU 진입** — 스키매틱 근거만 있음
-2. **PA9/PA10 UART 실출력** — 어댑터가 없어서 아무도 확인한 적이 없다.
+1. **NRST 버튼(SW3) 물리 더블탭** — 판정 로직은 확인했으나 버튼 입력으로는 미확정.
+   디버거 SRST 와 구분이 안 된다 (위 참고)
+2. **BOOT0(SW1) + NRST 로 ROM DFU 진입** — 스키매틱 근거만 있음
+3. **PA9/PA10 UART 실출력** — 어댑터가 없어서 아무도 확인한 적이 없다.
    지금까지 로그는 전부 SWD 로 읽었다 (`swdlog.sh`)
 
 ### 2026-08-30 에 해소된 것
 
 - **K1(PC13) 극성** — 회로도대로 **풀다운 + 누르면 HIGH** (아두이노 세션 실기)
-- **NRST 버튼(SW3) 더블탭** — 동작. `RESET_BIT_PIN` 만 뜨고 `reset_count : 2`,
-  `stay : double reset (msc on)`. `RESET_BIT_SOFT` 가 없으므로 SYSRESETREQ 가 아닌
-  진짜 버튼이다. H5 주석의 "SOFT+PIN 동시 세트" 는 이 실리콘에서 재현되지 않았다
+- **더블탭 판정 로직** — `RESET_BIT_PIN` 만 뜨고 `reset_count : 2`,
+  `stay : double reset (msc on)` 까지 확인했다. `RESET_BIT_SOFT` 가 없으므로
+  SYSRESETREQ 로 인한 것은 아니다. H5 주석의 "SOFT+PIN 동시 세트" 는 이 실리콘에서
+  재현되지 않았다.
+
+  **다만 물리 버튼이었는지는 확정하지 못했다.** 디버거가 SRST 를 걸어도 `PINRSTF` 가
+  서므로 구분되지 않는다. 실제로 openocd 를 `connect_assert_srst` 로 붙이면 짧은
+  간격의 PIN 리셋 2회가 되어 **더블탭으로 오인된다**(아두이노 세션이 이것 때문에
+  한참 헤맸다). 관측 시점에 그 세션이 SWD 를 붙이고 있었을 가능성이 있다.
+  SW3 버튼 자체는 아래 "남은 확인" 에 그대로 둔다
 - **실제 `.uf2` 드래그앤드롭** — 동작. `INFO_UF2.TXT` 확인 (아두이노 세션)
 - **CDC+HID 전용 모드(PID 0xB750)** — 1200bps 터치가 `MODE_BIT_BOOT` 만 쓰므로
   MSC 없이 잔류한다. 의도대로 동작

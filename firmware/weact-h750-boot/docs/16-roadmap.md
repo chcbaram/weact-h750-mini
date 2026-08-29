@@ -67,6 +67,42 @@
 - 호스트 업로드 툴
 - `Burn Bootloader` (DFU / ST-LINK)
 
+## SD 를 붙일 때 미리 알아둘 것 — HAL `SD_PowerON()` 버그
+
+부트로더는 SD 를 쓰지 않지만 앱이 쓰게 되면 바로 밟는다. 벤더링한
+STM32Cube_FW_H7_V1.12.1 에 있다.
+
+```c
+/* stm32h7xx_hal_sd.c : SD_PowerON() */
+errorstate = SDMMC_CmdOperCond(hsd->Instance);      /* CMD8 */
+if (errorstate == SDMMC_ERROR_TIMEOUT)             /* 0x80000000 */
+  hsd->SdCard.CardVersion = CARD_V1_X;
+else
+  hsd->SdCard.CardVersion = CARD_V2_X;
+```
+
+`SDMMC_GetCmdResp7()` 이 돌려주는 값은 두 가지다.
+
+| 상황 | 반환값 |
+|---|---|
+| 소프트웨어 폴링 카운터 소진 (플래그가 아예 안 섬) | `SDMMC_ERROR_TIMEOUT` **0x80000000** |
+| **하드웨어 CTIMEOUT — 카드가 CMD8 에 응답 없음** | `SDMMC_ERROR_CMD_RSP_TIMEOUT` **0x00000004** |
+
+**정상적인 "카드 무응답" 은 0x00000004 인데 0x80000000 과 비교한다.** 절대 일치하지
+않으므로 카드가 아예 없어도 `CardVersion = CARD_V2_X` 가 기록되고, 그 뒤 CMD55 가
+실패하며 `UNSUPPORTED_FEATURE` 로 끝난다.
+
+핸들만 보면 **"V2 카드는 인식했는데 CMD55 만 실패"** 로 읽혀서 엉뚱한 곳을 뒤지게
+된다. 실제로는 CMD8 부터 아무 응답이 없었던 것이다. V1 카드도 V2 로 오인된다.
+
+아두이노 세션이 raw CPSM 으로 확정했다.
+
+```
+CMD0   STA=0x00000080 CMDSENT      명령은 선에 나간다
+CMD8   STA=0x00000004 CTIMEOUT
+CMD55  STA=0x00000004 CTIMEOUT
+```
+
 ## 검토했으나 미구현
 
 - **부트 로그(플래시)** — 내부 플래시가 단일 128KB 섹터라 불가. 두 번째 SPI 플래시(U8, SPI1)로 옮길 수 있다

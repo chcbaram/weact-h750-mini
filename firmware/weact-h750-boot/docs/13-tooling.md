@@ -70,6 +70,21 @@ reset_config none separate      ->  정상
 부수 효과가 오히려 유리하다. SYSRESETREQ 는 **백업 도메인을 리셋하지 않으므로**
 RTC 백업 레지스터에 부트 모드 플래그를 써넣고 리셋하는 복구 경로가 그대로 성립한다.
 
+## 함정 1.5 — `connect_assert_srst` 를 쓰면 부트로더가 상주한다
+
+SRST 를 걸면 `RCC->RSR` 에 `PINRSTF` 가 선다. 즉 **디버거가 건 리셋과 사람이 누른
+NRST 를 부트로더가 구분하지 못한다.** openocd 를 `connect_assert_srst` 로 붙으면
+짧은 간격의 PIN 리셋이 두 번 생기고, `reset_count` 가 2가 되어 **더블탭으로 판정**
+되어 앱으로 점프하지 않는다.
+
+"디버거를 붙이면 앱이 안 뜬다" 로 보이는데 원인이 전혀 다른 곳에 있어서 오래 헤맨다
+(아두이노 세션이 실제로 겪었다).
+
+우리 cfg 는 `reset_config none separate` 라 SRST 를 아예 안 건드리므로 해당 없다.
+함정 1 의 결정이 여기서도 이득이 된다.
+
+돌고 있는 코어에 붙을 때는 핫플러그(`-c init -c halt`)가 가장 안전하다.
+
 ## 함정 2 — stmqspi 의 소거 단위는 64KB 다
 
 우리 드라이버(`qspi.c`)는 W25Q64JV 의 **4KB 서브섹터**(0x20)를 쓴다. openocd 의
