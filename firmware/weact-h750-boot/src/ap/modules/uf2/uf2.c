@@ -15,7 +15,7 @@ static uint32_t tr_family    = 0;
 static uint32_t flash_len    = 0;     // 기록된 최대 끝 오프셋
 static uint8_t  percent      = 0;
 
-static uint8_t  erase_map[UF2_ERASE_SECTOR_MAX / 8];
+static uint8_t  erase_map[(UF2_ERASE_SECTOR_MAX + 7) / 8];   // 올림. 내림하면 마지막 섹터에서 넘친다
 
 
 static void uf2TransferReset(WriteState *state);
