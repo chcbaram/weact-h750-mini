@@ -252,15 +252,17 @@ CFSR 해석: bit0 IACCVIOL(명령어 접근 위반), bit1 DACCVIOL, bit16 UNDEFI
 
 ## 남은 확인 (물리 조작 필요)
 
-1. **NRST 버튼(SW3) 더블탭** — 300ms 안에 두 번. `RESET_BIT_PIN` 만 뜨는지
-2. **BOOT0(SW1) + NRST 로 ROM DFU 진입** — 스키매틱 근거만 있음
-3. **K1(PC13) 극성**
-4. **PA9/PA10 UART 실출력** — 어댑터가 없어서 아무도 확인한 적이 없다.
+1. **BOOT0(SW1) + NRST 로 ROM DFU 진입** — 스키매틱 근거만 있음
+2. **K1(PC13) 극성**
+3. **PA9/PA10 UART 실출력** — 어댑터가 없어서 아무도 확인한 적이 없다.
    지금까지 로그는 전부 SWD 로 읽었다 (`swdlog.sh`)
 
-### 2026-08-30 에 해소된 것 (아두이노 세션 실기)
+### 2026-08-30 에 해소된 것
 
-- **실제 `.uf2` 드래그앤드롭** — 동작. `INFO_UF2.TXT` 확인
+- **NRST 버튼(SW3) 더블탭** — 동작. `RESET_BIT_PIN` 만 뜨고 `reset_count : 2`,
+  `stay : double reset (msc on)`. `RESET_BIT_SOFT` 가 없으므로 SYSRESETREQ 가 아닌
+  진짜 버튼이다. H5 주석의 "SOFT+PIN 동시 세트" 는 이 실리콘에서 재현되지 않았다
+- **실제 `.uf2` 드래그앤드롭** — 동작. `INFO_UF2.TXT` 확인 (아두이노 세션)
 - **CDC+HID 전용 모드(PID 0xB750)** — 1200bps 터치가 `MODE_BIT_BOOT` 만 쓰므로
   MSC 없이 잔류한다. 의도대로 동작
 - **1200bps 터치 → 부트로더 진입 → 기록 → 자동 실행** — 308.8 KB/s, TAG 검증 통과
