@@ -124,11 +124,18 @@ void bootUp(void)
     logPrintf("     [!!] no tag, no version - jumping anyway\n");
   }
 
-  bootJumpFirm();
+  {
+    uint16_t err = bootJumpFirm();
 
-  //-- 점프에 실패했다. 머무른다.
-  logPrintf("     [E_] jump failed - stay in boot\n");
-  boot_with_msc = true;
+    //-- 점프에 실패했다. 머무른다.
+    logPrintf("     [E_] jump failed (0x%X) - stay in boot\n", err);
+    boot_with_msc = true;
+
+    //-- 화면에도 남긴다. 여기서 직접 그리지 않는 이유는 ui.h 주석 참고.
+#ifdef _USE_HW_LCD
+    uiSetError(err == ERR_BOOT_FLASH_READ ? "QSPI READ FAIL" : "BAD IMAGE");
+#endif
+  }
 }
 
 void apMain(void)

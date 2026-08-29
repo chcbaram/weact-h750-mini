@@ -1,5 +1,6 @@
 #include "boot/boot.h"
 #include "cli.h"
+#include "ui/ui.h"
 
 
 static BootImgType_t img_type = BOOT_IMG_NONE;
@@ -387,6 +388,19 @@ uint16_t bootJumpFirm(void)
 #endif
 
   resetSetBootMode(0);
+
+  /*
+   * 앱으로 넘어간다는 것을 화면에 남긴다.
+   *
+   * bspDeInit() **앞이어야** 한다. 그 뒤에는 NVIC 가 전부 마스크되어 SPI DMA
+   * 완료 인터럽트가 오지 않고, 전송이 끝나지 않은 채로 점프하면 화면이 절반만
+   * 갱신된다. XiP 도 아직 꺼져 있어서 bootGetVer() 의 indirect 읽기가 성립한다.
+   *
+   * 이 화면은 앱이 자기 LCD 를 초기화할 때까지 그대로 남는다.
+   */
+#if defined(_USE_HW_LCD) && (HW_DEV_MODE == HW_DEV_MODE_BOOT)
+  uiShowJump(reset_handler);
+#endif
 
   /*
    * 순서가 중요하다. **캐시 정리를 먼저, XiP 진입을 나중에** 한다.

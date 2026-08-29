@@ -14,7 +14,7 @@
 | 5 | TinyUSB (CDC + HID, 런타임 MSC) | **완료 · 실기** |
 | 6 | cmd 프로토콜 (HID/CDC) | **완료 · 실기** |
 | 7 | UF2 + MSC (FAT16) | **완료** (볼륨/README 확인. 실제 .uf2 드롭 미시험) |
-| 8 | LCD 진행률 UI | **완료 · 실기** |
+| 8 | LCD 진행률 UI (+점프/에러 화면) | **완료 · 실기** |
 | 9 | 앱 프로젝트 `weact-h750-fw` | **스캐폴딩만** (아래 참고) |
 | 10 | 툴링 (openocd, tasks.json) | **완료 · 실기** (13 문서) |
 | 11 | 아두이노 코어 연동 | **별도 세션에서 진행 중** |
@@ -128,6 +128,16 @@ HID 는 `hidapi` 필요. 사용자 환경을 건드리지 않으려면 격리 ve
 매칭 조건: **VID 0x1209 + PID 0xB750(CDC+HID)/0xB751(+MSC)/0xB752(앱) + usage page 0xFF75**
 `cmdproto.py` 의 `HidTransport` 가 세 PID 를 순서대로 시도한다.
 (0xCAFE 는 TinyUSB 예제용이라 폐기. `1209:B010` 은 이미 남이 등록돼 있었다 — 08 문서)
+
+### 화면을 눈으로 안 보고 확인하기
+
+프레임버퍼가 D2 SRAM 에 그대로 남아 있고, 앱은 LCD 를 안 건드린다.
+
+```bash
+openocd -f tools/openocd/weact-h750.cfg \
+        -c init -c halt -c "dump_image fb.bin 0x30000000 25600" -c resume -c shutdown
+# RGB565 LE 160x80 -> PNG (11 문서에 변환 스니펫)
+```
 
 ## 실기 확인된 값
 
