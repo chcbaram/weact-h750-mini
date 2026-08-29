@@ -1,0 +1,313 @@
+#include "uf2.h"
+#include "cli.h"
+
+
+#if CLI_USE(HW_BOOT)
+static void cliUf2(cli_args_t *args);
+#endif
+
+static bool     is_init      = false;
+static bool     is_done_req  = false;
+static bool     is_jump_req  = false;
+static bool     is_tr_active = false;
+
+static uint32_t tr_family    = 0;
+static uint32_t flash_len    = 0;     // 기록된 최대 끝 오프셋
+static uint8_t  percent      = 0;
+
+static uint8_t  erase_map[UF2_ERASE_SECTOR_MAX / 8];
+
+
+static void uf2TransferReset(WriteState *state);
+static bool uf2FlashEraseOnce(uint32_t offset, uint32_t len);
+static bool uf2FlashWrite(uint32_t target_addr, void const *data, uint32_t len);
+static bool uf2FlashFlush(void);
+
+
+
+bool uf2Init(void)
+{
+  is_init      = true;
+  is_done_req  = false;
+  is_jump_req  = false;
+  is_tr_active = false;
+  flash_len    = 0;
+  percent      = 0;
+  memset(erase_map, 0, sizeof(erase_map));
+
+  logPrintf("[OK] uf2Init()\n");
+  logPrintf("     familyID : 0x%08X\n", (unsigned int)BOARD_UF2_FAMILY_ID);
+  logPrintf("     max fw   : %d KB\n", (int)(UF2_MAX_FW_SIZE/1024));
+
+#if CLI_USE(HW_BOOT)
+  cliAdd("uf2", cliUf2);
+#endif
+  return true;
+}
+
+bool uf2IsBusy(void)     { return is_tr_active || is_done_req; }
+uint8_t uf2GetPercent(void) { return percent; }
+void uf2RequestJump(void)   { is_jump_req = true; }
+
+static inline bool uf2IsBlock(UF2_Block const *bl)
+{
+  return (bl->magicStart0 == UF2_MAGIC_START0) &&
+         (bl->magicStart1 == UF2_MAGIC_START1) &&
+         (bl->magicEnd    == UF2_MAGIC_END) &&
+         (bl->flags & UF2_FLAG_FAMILYID) &&
+         !(bl->flags & UF2_FLAG_NOFLASH);
+}
+
+void uf2TransferReset(WriteState *state)
+{
+  memset(state, 0, sizeof(WriteState));
+  memset(erase_map, 0, sizeof(erase_map));
+  flash_len = 0;
+  percent   = 0;
+}
+
+/*
+ * 섹터를 전송당 한 번만 지운다.
+ *
+ * UF2 블록은 순서가 뒤죽박죽으로 올 수 있고 같은 섹터에 여러 블록이 들어간다.
+ * 매번 지우면 앞서 쓴 내용이 날아간다.
+ */
+bool uf2FlashEraseOnce(uint32_t offset, uint32_t len)
+{
+  uint32_t sector_s = offset / UF2_ERASE_SECTOR_SIZE;
+  uint32_t sector_e = (offset + len - 1) / UF2_ERASE_SECTOR_SIZE;
+
+  for (uint32_t i=sector_s; i<=sector_e; i++)
+  {
+    uint8_t  mask = 1 << (i % 8);
+    uint32_t pos  = i / 8;
+
+    if (i >= UF2_ERASE_SECTOR_MAX) return false;
+    if (erase_map[pos] & mask) continue;
+
+    if (flashErase(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + i * UF2_ERASE_SECTOR_SIZE,
+                   UF2_ERASE_SECTOR_SIZE) != true)
+    {
+      return false;
+    }
+    erase_map[pos] |= mask;
+  }
+  return true;
+}
+
+/*
+ * targetAddr 은 uf2conv.py --base 0x0 로 만들었으므로 **0 기준 오프셋**이다.
+ * 앱 본체가 시작하는 0x90001000 을 더한다.
+ */
+bool uf2FlashWrite(uint32_t target_addr, void const *data, uint32_t len)
+{
+  if (target_addr + len > UF2_MAX_FW_SIZE) return false;
+
+  if (uf2FlashEraseOnce(target_addr, len) != true) return false;
+
+  if (flashWrite(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + target_addr,
+                 (uint8_t *)data, len) != true)
+  {
+    return false;
+  }
+
+  //-- 블록이 순서대로 오지 않으므로 누적이 아니라 **최대 끝 오프셋**을 기록한다.
+  if (target_addr + len > flash_len) flash_len = target_addr + len;
+
+  return true;
+}
+
+/*
+ * 태그를 마지막에 쓴다. 이게 커밋 마커다.
+ *
+ * 태그는 독립된 4KB 섹터라 앱 본체를 건드리지 않고 쓸 수 있다(00 문서).
+ * 중간에 전원이 끊기면 태그가 무효라 부트로더가 점프를 거부한다.
+ */
+bool uf2FlashFlush(void)
+{
+  firm_tag_t tag;
+  uint16_t   crc = 0;
+  uint8_t    buf[256];
+
+  if (flash_len == 0) return false;
+
+  //-- CRC 는 굽는 경로와 같은 indirect 로 다시 읽어 계산한다 (07 문서)
+  for (uint32_t i=0; i<flash_len; i+=sizeof(buf))
+  {
+    uint32_t len = flash_len - i;
+
+    if (len > sizeof(buf)) len = sizeof(buf);
+    if (flashRead(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + i, buf, len) != true) return false;
+    crc = utilCalcCRC(crc, buf, len);
+  }
+
+  memset(&tag, 0, sizeof(tag));
+  tag.magic_number = TAG_MAGIC_NUMBER;
+  tag.fw_addr      = FLASH_SIZE_TAG;
+  tag.fw_size      = flash_len;
+  tag.fw_crc       = crc;
+  tag.tag_crc      = utilCalcCRC(0, (uint8_t *)&tag, sizeof(tag) - 4);
+
+  if (flashErase(FLASH_ADDR_FIRM, FLASH_SIZE_TAG) != true) return false;
+  if (flashWrite(FLASH_ADDR_FIRM, (uint8_t *)&tag, sizeof(tag)) != true) return false;
+
+  logPrintf("[  ] uf2 flush : %d bytes, crc 0x%04X\n", (int)flash_len, crc);
+  return true;
+}
+
+int uf2WriteBlock(uint32_t block_no, uint8_t *data, WriteState *state)
+{
+  UF2_Block *bl = (void *)data;
+  bool is_new_block = true;
+
+  (void)block_no;
+
+  if (!uf2IsBlock(bl)) return UF2_RET_NOT_UF2;
+
+  if (bl->familyID != BOARD_UF2_FAMILY_ID)
+  {
+    logPrintf("[E_] familyID 0x%X != 0x%X\n",
+              (unsigned int)bl->familyID, (unsigned int)BOARD_UF2_FAMILY_ID);
+    return UF2_RET_NOT_UF2;
+  }
+
+  //-- 새 전송 판정. 총 블록 수가 다르면 다른 파일이다.
+  if (is_tr_active == false || bl->familyID != tr_family ||
+      (bl->numBlocks > 0 && state->numBlocks > 0 && bl->numBlocks != state->numBlocks))
+  {
+    uf2TransferReset(state);
+    is_tr_active = true;
+    tr_family    = bl->familyID;
+    logPrintf("[  ] uf2 begin (%d blocks)\n", (int)bl->numBlocks);
+  }
+
+  if (bl->numBlocks > 0 && bl->numBlocks < MAX_BLOCKS)
+    state->numBlocks = bl->numBlocks;
+
+  /*
+   * 호스트가 같은 블록을 다시 보내는 경우가 있다. 다시 기록하면 길이가 두 번
+   * 반영되고 소거가 다시 걸려 앞서 쓴 내용이 날아간다.
+   */
+  if (state->numBlocks > 0 && bl->blockNo < MAX_BLOCKS)
+  {
+    uint8_t  mask = 1 << (bl->blockNo % 8);
+    uint32_t pos  = bl->blockNo / 8;
+
+    if (state->writtenMask[pos] & mask)
+    {
+      is_new_block = false;
+    }
+    else
+    {
+      state->writtenMask[pos] |= mask;
+      state->numWritten++;
+    }
+  }
+
+  if (is_new_block)
+  {
+    if (uf2FlashWrite(bl->targetAddr, bl->data, bl->payloadSize) != true)
+    {
+      state->aborted = true;
+      is_tr_active   = false;
+      return UF2_RET_ERR;
+    }
+    ledToggle(_DEF_LED1);
+  }
+
+  if (state->numBlocks > 0)
+    percent = (uint8_t)((state->numWritten * 100) / state->numBlocks);
+
+  return UF2_DISK_BLOCK_SIZE;
+}
+
+bool uf2FlashComplete(WriteState *state)
+{
+  if (state->aborted) return false;
+
+  /*
+   * 호스트는 전송이 끝난 뒤에도 FAT/디렉터리 갱신으로 write10 을 더 보낸다.
+   * 그때마다 complete_cb 가 다시 불리므로 한 번 마무리한 전송을 재실행하지
+   * 않도록 막는다.
+   */
+  if (is_done_req) return true;
+
+  if (uf2FlashFlush() != true)
+  {
+    logPrintf("[E_] uf2FlashFlush()\n");
+    is_tr_active     = false;
+    state->numBlocks = 0;
+    return false;
+  }
+
+  is_tr_active     = false;
+  state->numBlocks = 0;
+  is_done_req      = true;
+  return true;
+}
+
+//-- 완료 후 상태머신. USB 콜백 밖(메인 루프)에서 돈다.
+void uf2Update(void)
+{
+  static uint8_t  state = 0;
+  static uint32_t pre_time = 0;
+
+  if (is_init != true) return;
+
+  switch (state)
+  {
+    case 0:
+      if (is_done_req || is_jump_req)
+      {
+        pre_time = millis();
+        state = 1;
+      }
+      break;
+
+    case 1:
+      //-- 호스트가 FAT/디렉터리 기록과 SYNCHRONIZE_CACHE 를 마칠 시간을 준다.
+      if (millis() - pre_time >= UF2_COMPLETE_WAIT_MS)
+      {
+        state = 2;
+      }
+      break;
+
+    case 2:
+      if (bootVerifyFirm() != BOOT_IMG_NONE)
+      {
+        logPrintf("[  ] uf2 -> jump\n");
+        delay(UF2_JUMP_WAIT_MS);
+        bootJumpFirm();
+      }
+      //-- 점프에 실패해도 벽돌이 아니다. 다시 복사할 수 있게 되돌린다.
+      logPrintf("[E_] uf2 jump failed\n");
+      is_done_req = false;
+      is_jump_req = false;
+      state = 0;
+      break;
+  }
+}
+
+
+#if CLI_USE(HW_BOOT)
+void cliUf2(cli_args_t *args)
+{
+  bool ret = false;
+
+  if (args->argc == 1 && args->isStr(0, "info"))
+  {
+    cliPrintf("familyID  : 0x%08X\n", (unsigned int)BOARD_UF2_FAMILY_ID);
+    cliPrintf("max fw    : %d KB\n", (int)(UF2_MAX_FW_SIZE/1024));
+    cliPrintf("disk      : %d MB (FAT16)\n",
+              (int)((uint32_t)UF2_DISK_BLOCK_NUM * UF2_DISK_BLOCK_SIZE / (1024*1024)));
+    cliPrintf("medium    : %s\n", uf2DiskGetMedium() ? "present" : "not present");
+    cliPrintf("busy      : %d  (%d%%)\n", uf2IsBusy(), uf2GetPercent());
+    ret = true;
+  }
+
+  if (ret == false)
+  {
+    cliPrintf("uf2 info\n");
+  }
+}
+#endif
