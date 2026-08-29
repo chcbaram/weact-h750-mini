@@ -198,6 +198,9 @@ CFSR 해석: bit0 IACCVIOL(명령어 접근 위반), bit1 DACCVIOL, bit16 UNDEFI
 11. **RTC 클럭 재선택 = 백업 도메인 리셋** (12 문서)
 12. **SWD 의 SRST 가 안 먹는다** — MAX809 수퍼바이저. `reset_config none` (13 문서)
 13. **openocd stmqspi 소거 단위는 64KB** — 태그 4KB 만 지우는 건 불가능 (13 문서)
+14. **`tr`/`sed` 에 `LC_ALL=C`** — 로그에 non-UTF8 바이트가 섞이면 macOS 의 tr 이
+    "Illegal byte sequence" 로 죽어 **그 지점부터 로그가 통째로 잘린다**.
+    폴트 로그의 초기화 안 된 `.noinit` 필드에서 실제로 겪었다 (`swdlog.sh`)
 
 ## 남은 확인 (물리 조작 필요)
 

@@ -72,6 +72,7 @@ void bootUp(void)
   bool          stay = false;
   bool          with_msc = false;
   const char   *reason = "";
+  uint32_t      fault_cnt = 0;
 
   int ui_reason = 2;    // UI_REASON_NO_FIRM
 
@@ -91,6 +92,52 @@ void bootUp(void)
     ui_reason = 0;      // UI_REASON_DBLCLK
   }
 
+  /*
+   * 폴트 루프 차단.
+   *
+   * 나쁜 이미지로 점프하면 앱의 SystemInit() 이 VTOR 을 바꾸기 전에 죽으므로
+   * **부트로더 자신의** 폴트 핸들러가 잡는다. faultReset() 이 백업 레지스터의
+   * 카운터를 올리고 리셋한다. 그래서 이 보호는 앱의 협조가 전혀 필요 없다.
+   * (실제로 겪었다 - IACCVIOL 로 초당 9회 부팅 루프. 07/13 문서)
+   *
+   * **연속** 폴트만 센다. faultIsFaultBoot() 은 .noinit 의 매직으로 "이번 부팅이
+   * 폴트 직후인가" 를 알려준다. 폴트가 아닌 이유로 부팅했으면 이전 실행이 폴트로
+   * 끝나지 않았다는 뜻이므로 카운터를 접는다. 그렇지 않으면 기기 수명 동안 폴트
+   * 3번이 누적되는 순간 영원히 점프하지 않게 된다.
+   */
+  {
+    fault_cnt = resetGetFaultCount();
+
+    if (faultIsFaultBoot() != true && fault_cnt > 0)
+    {
+      resetSetFaultCount(0);
+      fault_cnt = 0;
+    }
+
+    if (fault_cnt >= HW_BOOT_FAULT_MAX)
+    {
+      stay      = true;
+      with_msc  = true;               // 새 이미지를 받을 수단이 있어야 한다
+      reason    = "fault loop";
+      ui_reason = 3;    // UI_REASON_FAULT
+    }
+  }
+
+  /*
+   * 점프 확인 카운터. 기본은 꺼져 있다 (HW_BOOT_TRY_MAX = 0).
+   * 앱이 resetConfirmBoot() 을 부르지 않으면 정상 앱도 막히기 때문이다.
+   */
+#if HW_BOOT_TRY_MAX > 0
+  if (resetGetBootTry() >= HW_BOOT_TRY_MAX)
+  {
+    stay      = true;
+    with_msc  = true;
+    reason    = "boot try";
+    ui_reason = 3;      // UI_REASON_FAULT
+    logPrintf("     try   : %d/%d\n", (int)resetGetBootTry(), HW_BOOT_TRY_MAX);
+  }
+#endif
+
   if (img == BOOT_IMG_NONE)
   {
     stay      = true;
@@ -101,6 +148,10 @@ void bootUp(void)
 
   logPrintf("[  ] bootUp()\n");
   logPrintf("     image : %s\n", (const char *[]){"NONE","RAW","VER","TAG"}[img]);
+  if (fault_cnt > 0)
+  {
+    logPrintf("     fault : %d/%d\n", (int)fault_cnt, HW_BOOT_FAULT_MAX);
+  }
 
   if (stay)
   {
@@ -125,7 +176,14 @@ void bootUp(void)
   }
 
   {
-    uint16_t err = bootJumpFirm();
+    uint16_t err;
+
+#if HW_BOOT_TRY_MAX > 0
+    //-- 점프 직전에 올린다. 앱이 resetConfirmBoot() 으로 되돌려야 한다.
+    resetSetBootTry(resetGetBootTry() + 1);
+#endif
+
+    err = bootJumpFirm();
 
     //-- 점프에 실패했다. 머무른다.
     logPrintf("     [E_] jump failed (0x%X) - stay in boot\n", err);

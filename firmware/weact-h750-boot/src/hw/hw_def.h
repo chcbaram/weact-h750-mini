@@ -6,7 +6,7 @@
 #include "assert_def.h"
 
 
-#define _DEF_FIRMWATRE_VERSION    "V260830R2"
+#define _DEF_FIRMWATRE_VERSION    "V260830R3"
 #define _DEF_BOARD_NAME           "WEACT-H750-BOOT"
 
 
@@ -78,7 +78,22 @@
 #define      HW_RESET_CNT_MASK      0x000000FFUL
 #define      HW_RESET_DBLCLK_MS     300
 #define      HW_RESET_DBLCLK_CNT    2
-#define      HW_BOOT_TRY_MAX        3
+/*
+ * 부팅 루프 방지. 둘 다 RTC 백업 레지스터를 쓴다.
+ *
+ * HW_BOOT_FAULT_MAX (활성)
+ *   연속 폴트 리셋 횟수. faultReset() 이 NVIC_SystemReset() 직전에 증가시킨다.
+ *   **앱의 협조가 필요 없다.** 나쁜 이미지로 점프하면 앱의 SystemInit() 이 VTOR 을
+ *   바꾸기 전에 죽으므로 부트로더 자신의 폴트 핸들러가 잡는다. 그래서 아두이노
+ *   스케치를 포함해 모든 앱에 대해 동작한다.
+ *
+ * HW_BOOT_TRY_MAX (0 = 비활성)
+ *   점프 직전에 증가시키고, 앱이 정상 동작을 확인한 뒤 resetConfirmBoot() 으로
+ *   0 으로 되돌린다. **앱이 resetConfirmBoot() 을 부르지 않으면 정상 앱도 몇 번
+ *   부팅한 뒤 막힌다.** 아두이노 코어는 이 함수를 부르지 않으므로 기본은 끈다.
+ *   자체 앱(weact-h750-fw)에서 확인 호출을 넣은 뒤에 켤 것.
+ */
+#define      HW_BOOT_TRY_MAX        0
 #define      HW_BOOT_FAULT_MAX      3
 
 //-- 아래 블록들은 해당 단계에서 켠다. (드라이버가 아직 없다)

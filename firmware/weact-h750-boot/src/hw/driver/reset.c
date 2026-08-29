@@ -294,6 +294,11 @@ void resetIncFaultCount(void)
   rtcSetReg(HW_RTC_FAULT_CNT, HW_RESET_CNT_MAGIC | cnt);
 }
 
+void resetSetFaultCount(uint32_t cnt)
+{
+  rtcSetReg(HW_RTC_FAULT_CNT, HW_RESET_CNT_MAGIC | (cnt & HW_RESET_CNT_MASK));
+}
+
 void resetConfirmBoot(void)
 {
   resetSetBootTry(0);

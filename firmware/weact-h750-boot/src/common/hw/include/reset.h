@@ -49,6 +49,7 @@ uint32_t resetGetBootTry(void);
 void     resetSetBootTry(uint32_t cnt);
 uint32_t resetGetFaultCount(void);
 void     resetIncFaultCount(void);
+void     resetSetFaultCount(uint32_t cnt);
 void     resetConfirmBoot(void);
 
 #endif

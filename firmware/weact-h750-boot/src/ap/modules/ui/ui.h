@@ -15,6 +15,7 @@ typedef enum
   UI_REASON_DBLCLK = 0,     // 리셋 더블클릭
   UI_REASON_REQUEST,        // 앱이 요청
   UI_REASON_NO_FIRM,        // 유효한 펌웨어 없음
+  UI_REASON_FAULT,          // 폴트 루프. 점프를 막았다
 } UiReason_t;
 
 

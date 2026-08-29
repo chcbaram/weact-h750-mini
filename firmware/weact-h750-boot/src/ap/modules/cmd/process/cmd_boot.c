@@ -281,7 +281,11 @@ bool cmdBootProcess(cmd_t *p_cmd)
         else if (flashWrite(FLASH_ADDR_FIRM, (uint8_t *)&tag, sizeof(tag)) != true)
           err_code = ERR_BOOT_FLASH_WRITE;
         else
+        {
+          //-- 커밋 성공. 폴트 카운터를 접는다 (uf2.c 와 같은 이유)
+          resetSetFaultCount(0);
           logPrintf("[  ] fw end %d bytes, crc 0x%04X\n", (int)wr_index, crc);
+        }
       }
 
       wr_length = -1;

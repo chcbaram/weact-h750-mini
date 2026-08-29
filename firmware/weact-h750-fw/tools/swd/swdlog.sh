@@ -41,5 +41,8 @@ openocd -f interface/stlink.cfg -f target/stm32h7x.cfg \
   -c "dump_image $OUT.buf 0x$PTR $LEN" \
   -c "resume" -c "shutdown" >/dev/null 2>&1
 
-tr -d '\0' < "$OUT.buf"
+# LC_ALL=C 가 없으면 macOS 의 tr 이 non-UTF8 바이트에서 "Illegal byte sequence" 로
+# 죽는다. 폴트 로그의 초기화 안 된 .noinit 필드처럼 쓰레기 바이트가 섞이면 그
+# 지점부터 로그가 통째로 잘린다. 실제로 겪었다.
+LC_ALL=C tr -d '\0' < "$OUT.buf"
 rm -f "$OUT.hdr" "$OUT.buf"

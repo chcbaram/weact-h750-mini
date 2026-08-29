@@ -143,7 +143,7 @@ void uiUpdate(void const *arg)
 
 void uiDrawIdle(void)
 {
-  const char   *reason_str[] = {"DOUBLE RESET", "APP REQUEST", "NO FIRMWARE"};
+  const char   *reason_str[] = {"DOUBLE RESET", "APP REQUEST", "NO FIRMWARE", "FAULT LOOP"};
   const char   *img_str[]    = {"NO FIRMWARE", "FW: RAW", "FW: VER", "FW: TAG"};
   BootImgType_t img = bootGetImgType();
   bool          err = (ui_error != NULL);
@@ -164,7 +164,7 @@ void uiDrawIdle(void)
   else
   {
     lcdPrintf(4, 24, white, "%s", _DEF_FIRMWATRE_VERSION);
-    lcdPrintf(4, 36, gray,  "%s", reason_str[ui_reason]);
+    lcdPrintf(4, 36, ui_reason == UI_REASON_FAULT ? red : gray, "%s", reason_str[ui_reason]);
     lcdPrintf(4, 48, ui_msc ? yellow : gray, "USB CDC+HID%s", ui_msc ? "+MSC" : "");
     lcdPrintf(4, 60, img == BOOT_IMG_NONE ? red : green, "%s", img_str[img]);
   }

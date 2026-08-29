@@ -151,6 +151,15 @@ bool uf2FlashFlush(void)
   if (flashErase(FLASH_ADDR_FIRM, FLASH_SIZE_TAG) != true) return false;
   if (flashWrite(FLASH_ADDR_FIRM, (uint8_t *)&tag, sizeof(tag)) != true) return false;
 
+  /*
+   * 새 이미지를 커밋했다. 폴트 카운터를 접는다.
+   *
+   * 이게 없으면 "폴트 루프로 막힘 -> 사용자가 고친 .uf2 를 떨어뜨림 -> 카운터가
+   * 그대로라 다음 부팅에서 또 막힘" 이 된다. 태그를 쓴 시점이 곧 "사용자가
+   * 고쳤다" 는 신호다.
+   */
+  resetSetFaultCount(0);
+
   logPrintf("[  ] uf2 flush : %d bytes, crc 0x%04X\n", (int)flash_len, crc);
   return true;
 }
