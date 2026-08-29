@@ -204,6 +204,13 @@ CFSR 해석: bit0 IACCVIOL(명령어 접근 위반), bit1 DACCVIOL, bit16 UNDEFI
 1. **NRST 버튼(SW3) 더블탭** — 300ms 안에 두 번. `RESET_BIT_PIN` 만 뜨는지
 2. **BOOT0(SW1) + NRST 로 ROM DFU 진입** — 스키매틱 근거만 있음
 3. **K1(PC13) 극성**
-4. **실제 `.uf2` 드래그앤드롭**
-5. **CDC+HID 전용 모드(PID 0xB750)** — 부트 모드 진입 경로가 전부 MSC 를 함께 켠다.
-   앱이 `resetToBoot(with_msc=false)` 로 요청하는 경로가 생겨야 시험할 수 있다
+4. **PA9/PA10 UART 실출력** — 어댑터가 없어서 아무도 확인한 적이 없다.
+   지금까지 로그는 전부 SWD 로 읽었다 (`swdlog.sh`)
+
+### 2026-08-30 에 해소된 것 (아두이노 세션 실기)
+
+- **실제 `.uf2` 드래그앤드롭** — 동작. `INFO_UF2.TXT` 확인
+- **CDC+HID 전용 모드(PID 0xB750)** — 1200bps 터치가 `MODE_BIT_BOOT` 만 쓰므로
+  MSC 없이 잔류한다. 의도대로 동작
+- **1200bps 터치 → 부트로더 진입 → 기록 → 자동 실행** — 308.8 KB/s, TAG 검증 통과
+- **앱 열거** — `1209:B752`

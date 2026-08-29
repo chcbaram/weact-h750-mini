@@ -32,6 +32,29 @@ firmware/weact-h750-fw/               같은 구성 (앱 기준으로 방향만 
 참조 프로젝트(`stm32h5-w6300`)는 pyocd + CubeProgrammer 기준이라 태스크를 그대로 가져올
 수 없었다. 전부 openocd 로 다시 썼다.
 
+## 함정 0 — `transport select hla_swd` 를 박지 않는다
+
+```
+Error: Debug adapter doesn't support 'hla_swd' transport
+```
+
+`interface/stlink.cfg` 는 어느 openocd 를 쓰느냐에 따라 다른 드라이버를 고른다.
+
+| | `adapter driver` | 쓰는 transport |
+|---|---|---|
+| homebrew openocd 0.12 | `hla` | `hla_swd` |
+| ST 가 배포하는 openocd 포크 | `st-link` (DAP) | `dapdirect_swd` |
+
+`transport select hla_swd` 를 박아두면 후자에서 위 에러로 죽는다. **아예 지정하지
+않으면** openocd 가 어댑터가 지원하는 첫 번째 것을 자동으로 고른다.
+
+```
+Info : auto-selecting first available session transport "hla_swd".
+```
+
+아두이노 세션이 이 에러를 만나서 알게 됐다. 지금은 두 프로젝트 모두 `transport select`
+줄이 없다.
+
 ## 함정 1 — SRST 를 쓰면 halt 가 안 된다
 
 ```
