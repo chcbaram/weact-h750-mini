@@ -126,6 +126,37 @@ reset run
 **이 경로는 실제로 필요했다.** 개발 중 가짜 테스트 이미지를 QSPI 에 남겨둔 채
 부트로더를 다시 구웠다가 부팅 루프에 빠졌고, 이 명령으로 빠져나왔다.
 
+## 빌드 산출물
+
+```
+build/weact-h750-boot.elf    디버깅 (심볼)
+build/weact-h750-boot.bin    download.py / UF2 변환 / openocd program
+build/weact-h750-boot.hex    주소를 인자로 못 받는 툴용
+build/weact-h750-boot.map    링크 맵
+```
+
+`.hex` 를 따로 만드는 이유: `.bin` 은 **주소가 없는 날바이트**라 굽는 쪽에
+"0x08000000 에 넣어라" 를 따로 알려줘야 한다. `.hex`(Intel HEX)는 레코드마다 주소를
+갖고 있어서 툴이 주소를 몰라도 된다.
+
+```
+:020000040800F2              확장 선형 주소 = 0x0800xxxx
+:1000000000000824FD440008... 데이터
+:04000005080044FDAE          시작 주소 = 0x080044FD (Reset_Handler, Thumb 비트)
+:00000001FF                  EOF
+```
+
+ST-LINK Utility, CubeProgrammer GUI, 아두이노 코어의 `Burn Bootloader` 레시피처럼
+주소 인자를 받지 않는 경로에서 필요하다. openocd 도 그대로 받는다:
+
+```sh
+openocd -f tools/openocd/weact-h750.cfg -c 'program build/weact-h750-boot.hex verify reset exit'
+```
+
+**앱의 `.hex` 는 대부분의 툴로 못 굽는다.** 주소가 `0x90001000`(QSPI)이라 내부 플래시만
+아는 툴은 거부한다. `openocd` + `stmqspi` 설정으로만 가능하다. 앱은 `.uf2` 나 `.bin` 을
+쓰는 게 맞다.
+
 ## 업로드 경로 네 가지
 
 | 경로 | 속도 | 쓰는 때 |

@@ -160,3 +160,15 @@ add_custom_command(TARGET ${EXECUTABLE}
   COMMAND ${CMAKE_OBJCOPY} ARGS -O binary ${EXECUTABLE} ${PROJECT_NAME}.bin
   COMMENT "Invoking: Make Bin"
   )
+
+# .hex 도 만든다.
+#
+#   .bin 은 주소가 없는 날바이트라 "0x08000000 에 굽는다" 를 툴에 따로 알려줘야 한다.
+#   .hex 는 레코드마다 주소를 갖고 있어서 굽는 쪽이 주소를 몰라도 된다.
+#   ST-LINK Utility / CubeProgrammer GUI / 아두이노 코어의 Burn Bootloader 레시피처럼
+#   주소 인자를 받지 않는 경로에서 필요하다.
+add_custom_command(TARGET ${EXECUTABLE}
+  POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY} ARGS -O ihex ${EXECUTABLE} ${PROJECT_NAME}.hex
+  COMMENT "Invoking: Make Hex"
+  )
