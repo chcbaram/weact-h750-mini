@@ -1,6 +1,6 @@
 # 진행 상황
 
-최종 갱신 : 2026-08-30
+최종 갱신 : 2026-08-30 (V260830R3)
 
 ## 요약
 
@@ -10,10 +10,10 @@
 | 1 | bsp (클럭/캐시/MPU) + 기본 hw 드라이버 | **완료 · 실기** |
 | 2 | QSPI 드라이버 + XiP | **완료 · 실기** |
 | 3 | LCD (SPI4 + DMA, ST7735S) | **완료 · 실기** |
-| 4 | boot 모듈 + 이미지 식별 3단계 | **완료 · 실기** |
+| 4 | boot 모듈 + 이미지 식별 3단계 + 폴트 루프 차단 | **완료 · 실기** |
 | 5 | TinyUSB (CDC + HID, 런타임 MSC) | **완료 · 실기** |
 | 6 | cmd 프로토콜 (HID/CDC) | **완료 · 실기** |
-| 7 | UF2 + MSC (FAT16) | **완료** (볼륨/README 확인. 실제 .uf2 드롭 미시험). 상한 8119KB |
+| 7 | UF2 + MSC (FAT16) | **완료 · 실기** (드래그앤드롭 확인). 상한 8119 KB |
 | 8 | LCD 진행률 UI (+점프/에러 화면) | **완료 · 실기** |
 | 9 | 앱 프로젝트 `weact-h750-fw` | **스캐폴딩만** (아래 참고) |
 | 10 | 툴링 (openocd, tasks.json) | **완료 · 실기** (13 문서) |
@@ -36,9 +36,36 @@ LED(PE3) 점멸 육안 확인.  폴트 카운터 0 유지.
 ## 현재 빌드
 
 ```
-FLASH : 97224 B 75.35% / 126 KB
-D2RAM : 28,832 B (LCD 프레임버퍼 25,600 B)
+버전  : V260830R3
+FLASH : 97,888 B  75.87% / 126 KB
+RAM   : 37,952 B   7.24% / 512 KB (AXI)
+D2RAM : 28,832 B   9.78% / 288 KB (LCD 프레임버퍼 25,600 B)
+산출물: .elf / .bin / .hex / .map
 ```
+
+## 다음 세션 시작점 — 9단계 `weact-h750-fw`
+
+**부트로더(0~8단계)와 툴링(10단계)은 끝났다. 남은 것은 앱 프로젝트 하나다.**
+
+`firmware/weact-h750-fw/` 는 아직 **부트로더 복사본**이다. 이름과 USB PID 만 바꿔둔
+상태이고 링커스크립트가 `STM32H750VBTx_BOOT.ld` 라 내부 플래시로 링크된다.
+빌드는 시도하지 않았다.
+
+할 일은 `docs/16-roadmap.md` 9단계에 8항목으로 정리해 두었다. 요점만:
+
+1. `src/bsp/ldscript/STM32H750VBTx_QSPI.ld` 새로 작성
+   (`VECTOR 0x90001000 / VER 0x90001400 / FLASH 0x90001800`)
+2. **`_fw_flash_size` 를 절대 심볼로** 만들 것 — 링커 접기 함정 (12 문서)
+3. `system_stm32h7xx.c` 에 `SCB->VTOR = (uint32_t)&_fw_flash_begin;`
+4. `hw_def.h` : `HW_DEV_MODE = HW_DEV_MODE_APP` (지금 BOOT 다)
+5. `SystemClock_Config` 에 **`RCC_PERIPHCLK_QSPI` / `_RTC` 를 넣지 말 것** (12 문서)
+6. post-build 에 `uf2conv.py --base 0x0 --family 0xFFFF0004`
+7. 앱이 `resetConfirmBoot()` 을 부르면 `HW_BOOT_TRY_MAX` 를 켤 수 있다
+
+앱이 생기면 **자체 제작 이미지로 3단계 식별(TAG/VER/RAW) 전 경로를 처음 끝까지**
+검증할 수 있다. 지금은 아두이노 빌드로만 확인했다.
+
+`.vscode` 태스크/런처는 앱 프로젝트에 이미 들어가 있다 (빌드가 되면 바로 쓸 수 있다).
 
 ## 클럭 (확정)
 
@@ -157,9 +184,12 @@ openocd -f tools/openocd/weact-h750.cfg \
 계속 같은 곳으로 뛴다. SWD 로 RTC 백업 레지스터에 부트 요청을 직접 쓴다.
 
 ```bash
-openocd -f interface/stlink.cfg -f target/stm32h7x.cfg \
+cd firmware/weact-h750-boot
+openocd -f tools/openocd/weact-h750.cfg \
   -c "init" -c "halt" -c "mww 0x5800405C 0x00000003" -c "reset run" -c "shutdown"
 ```
+
+VSCode 태스크 **`Device - 부트 모드로 강제 진입`** 이 같은 일을 한다.
 
 `0x5800405C` = RTC_BKP_DR3(`HW_RTC_BOOT_MODE`), `0x3` = `MODE_BIT_BOOT|MODE_BIT_MSC`.
 `resetInit()` 이 읽고 바로 지우므로 **한 번만** 적용된다.
@@ -175,8 +205,26 @@ openocd -f interface/stlink.cfg -f target/stm32h7x.cfg \
 | `0x5800405C` | DR3 | `HW_RTC_BOOT_MODE` — bit0 BOOT, bit1 MSC |
 | `0x58004060` | DR4 | reset_bits |
 | `0x58004064` | DR5 | reset_count (magic `0xA55A0000`) |
-| `0x58004068` | DR6 | boot_try |
-| `0x5800406C` | DR7 | fault_count |
+| `0x58004068` | DR6 | boot_try (`HW_BOOT_TRY_MAX = 0` 이라 현재 미사용) |
+| `0x5800406C` | DR7 | fault_count (magic `0xA55A0000`) |
+
+값은 전부 `0xA55A0000 | count` 형태다. 매직이 안 맞으면 0 으로 친다
+(VBAT 없는 보드에서 백업 도메인이 쓰레기일 수 있다).
+
+**폴트 루프로 막혔을 때** 는 DR7 을 지우면 된다.
+
+```bash
+openocd -f tools/openocd/weact-h750.cfg \
+  -c "init" -c "halt" -c "mww 0x5800406C 0xA55A0000" -c "reset run" -c "shutdown"
+```
+
+반대로 **폴트 루프를 재현**하려면 카운터와 `.noinit` 매직을 함께 세운다
+(`faultIsFaultBoot()` 가 true 여야 차단된다).
+
+```bash
+-c "mww 0x20000010 0x5555AAAA"    # fault_log.magic_number. 주소는 nm 으로 확인
+-c "mww 0x5800406C 0xA55A0003"
+```
 
 ### 폴트 진단 (`.noinit`, 주소는 빌드마다 변함 — `arm-none-eabi-nm` 으로 확인)
 
