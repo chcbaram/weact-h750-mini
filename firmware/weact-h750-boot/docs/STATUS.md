@@ -16,7 +16,7 @@
 | 7 | UF2 + MSC (FAT16) | **완료** (볼륨/README 확인. 실제 .uf2 드롭 미시험) |
 | 8 | LCD 진행률 UI | **완료 · 실기** |
 | 9 | 앱 프로젝트 `weact-h750-fw` | **스캐폴딩만** (아래 참고) |
-| 10 | 툴링 (openocd, tasks.json) | 부분 (swdlog.sh, download 스크립트) |
+| 10 | 툴링 (openocd, tasks.json) | **완료 · 실기** (13 문서) |
 | 11 | 아두이노 코어 연동 | **별도 세션에서 진행 중** |
 
 ## 최대 성과 — 아두이노 앱이 QSPI XiP 로 실행됨
@@ -94,15 +94,29 @@ W25Q64JV 정격 133MHz 대비 여유 13MHz.
 
 ### 자주 쓰는 명령
 
+대부분 VSCode 태스크로 있다 (13 문서). 손으로 칠 때는:
+
 ```bash
 cd firmware/weact-h750-boot
 cmake -S . -B build && cmake --build build -j8
-openocd -f interface/stlink.cfg -f target/stm32h7x.cfg \
+
+# 부트로더 굽기 (QSPI 의 앱과 태그는 보존된다)
+openocd -f tools/openocd/weact-h750.cfg \
         -c "program build/weact-h750-boot.elf verify reset exit"
+
+# 지금 뭐가 돌고 있나  (0x900xxxxx = 앱, 0x080xxxxx = 부트로더)
+openocd -f tools/openocd/weact-h750.cfg -c init -c halt -c "reg pc" -c resume -c shutdown
+
+# QSPI 상태  (JEDEC + 태그 + 앱 벡터 테이블)
+openocd -f tools/openocd/weact-h750-qspi.cfg \
+        -c init -c "reset init" -c "flash info 1" -c "mdw 0x90000000 4" -c "mdw 0x90001000 4" -c shutdown
 
 ./tools/swd/swdlog.sh boot     # UART 없이 SWD 로 부팅 로그
 ./tools/swd/swdlog.sh list     # 전체 로그
 ```
+
+**`reset_config srst_only` 를 쓰면 안 된다.** MAX809 수퍼바이저가 NRST 를 구동해서
+halt 타이밍을 못 잡는다. `none separate` → SYSRESETREQ 를 쓴다 (13 문서).
 
 CDC cmd 프로토콜 (**921600** 으로 열 것. 115200 이면 CLI 가 CDC 를 가져감):
 
@@ -111,7 +125,9 @@ cd tools/download   # cmdproto.py 의 SerialTransport / HidTransport 사용
 ```
 
 HID 는 `hidapi` 필요. 사용자 환경을 건드리지 않으려면 격리 venv 에 설치.
-매칭 조건: **VID 0xCAFE + PID 0xB010(CDC+HID)/0xB011(+MSC) + usage page 0xFF75**
+매칭 조건: **VID 0x1209 + PID 0xB750(CDC+HID)/0xB751(+MSC)/0xB752(앱) + usage page 0xFF75**
+`cmdproto.py` 의 `HidTransport` 가 세 PID 를 순서대로 시도한다.
+(0xCAFE 는 TinyUSB 예제용이라 폐기. `1209:B010` 은 이미 남이 등록돼 있었다 — 08 문서)
 
 ## 실기 확인된 값
 
@@ -170,6 +186,8 @@ CFSR 해석: bit0 IACCVIOL(명령어 접근 위반), bit1 DACCVIOL, bit16 UNDEFI
 9. **점프 주소를 memory-mapped 로 재읽기 금지** (07 문서)
 10. **`#if CFG_TUD_*` 앞에 `tusb.h`** — 없으면 파일이 조용히 사라진다 (09/10 문서)
 11. **RTC 클럭 재선택 = 백업 도메인 리셋** (12 문서)
+12. **SWD 의 SRST 가 안 먹는다** — MAX809 수퍼바이저. `reset_config none` (13 문서)
+13. **openocd stmqspi 소거 단위는 64KB** — 태그 4KB 만 지우는 건 불가능 (13 문서)
 
 ## 남은 확인 (물리 조작 필요)
 
@@ -177,4 +195,5 @@ CFSR 해석: bit0 IACCVIOL(명령어 접근 위반), bit1 DACCVIOL, bit16 UNDEFI
 2. **BOOT0(SW1) + NRST 로 ROM DFU 진입** — 스키매틱 근거만 있음
 3. **K1(PC13) 극성**
 4. **실제 `.uf2` 드래그앤드롭**
-5. **CDC+HID 전용 모드(PID 0xB010)** — 유효 앱이 있는 지금은 시험 가능
+5. **CDC+HID 전용 모드(PID 0xB750)** — 부트 모드 진입 경로가 전부 MSC 를 함께 켠다.
+   앱이 `resetToBoot(with_msc=false)` 로 요청하는 경로가 생겨야 시험할 수 있다

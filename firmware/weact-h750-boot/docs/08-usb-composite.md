@@ -65,7 +65,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
 }
 ```
 
-**PID 도 함께 바꾼다** (`0xB010` ↔ `0xB011`). 같은 VID/PID 로 인터페이스 구성만 바뀌면
+**PID 도 함께 바꾼다** (`0xB750` ↔ `0xB751`). 같은 VID/PID 로 인터페이스 구성만 바뀌면
 호스트(특히 윈도우)가 캐시된 드라이버 정보를 재사용해 새 인터페이스를 인식하지 못한다.
 
 `CFG_TUD_MSC` 는 컴파일 타임에 1 로 두고 **디스크립터만** 바꾼다.
@@ -123,8 +123,8 @@ ls /dev/cu.usbmodem*               # CDC
 
 ```
 WEACT-H750-BOOT:
-  Product ID: 0xb011          <- MSC 포함 모드 PID. 런타임 전환 동작 확인
-  Vendor ID: 0xcafe
+  Product ID: 0xb751          <- MSC 포함 모드 PID. 런타임 전환 동작 확인
+  Vendor ID: 0x1209
   Serial Number: 001E00333233510837333531
   Manufacturer: BARAM
   Speed: Up to 12 Mb/s
@@ -152,6 +152,41 @@ baud    : 115200
 
 CLI 명령 14개(HELP/MD/LOG/UART/RTC/RESET/GPIO/QSPI/FLASH/LCD/BOOT/UF2/USB/MODULE) 전부 등록.
 
-**[미확인]** CDC+HID 전용 모드(PID `0xB010`)는 아직 실기 확인 못 했다. 현재 QSPI 가 비어
-있어 `bootUp()` 이 "no firmware" 로 판단해 MSC 를 강제로 켜기 때문이다. 9단계에서 실제
-앱이 올라간 뒤 확인한다.
+**[미확인]** CDC+HID 전용 모드(PID `0xB750`)는 아직 실기 확인 못 했다. 정상 부팅에서는
+USB 를 아예 열지 않고 점프하고, 부트 모드 진입 경로는 전부 MSC 를 함께 켜기 때문이다.
+앱이 `resetToBoot(with_msc=false)` 로 요청하는 경로가 생기면 그때 확인한다.
+
+## VID/PID — 0xCAFE 를 버린 이유
+
+| | 기존 | 현재 |
+|---|---|---|
+| VID | `0xCAFE` | **`0x1209`** (pid.codes) |
+| 부트로더 CDC+HID | `0xB010` | **`0xB750`** |
+| 부트로더 +MSC | `0xB011` | **`0xB751`** |
+| 앱 | (부트로더와 동일했다) | **`0xB752`** |
+
+`0xCAFE` 는 TinyUSB 예제용 값이라 **아무에게도 할당되지 않았다.** 같은 값을 쓰는 다른
+TinyUSB 장치와 충돌한다. `0x1209` 는 오픈소스 하드웨어용으로 정식 확보된 VID 다.
+
+PID 는 pid.codes 레지스트리(등록 921개)와 대조해서 골랐다. **`1209:B010` 은 이미 남이
+등록했다** — 하위 바이트를 그대로 유지했으면 충돌할 뻔했다. `B750`~`B752` 는 비어 있고
+연속 3개가 확보된다.
+
+**아직 등록 PR 은 올리지 않았다.** "비어 있지만 내 것도 아닌" 상태다.
+
+앱에 별도 PID 를 준 것이 중요하다. 이전에는 아두이노 스케치가 부트로더와 **똑같은
+VID/PID 로 열거**되어 호스트가 "지금 부트로더인가 앱인가" 를 USB 만으로 구분할 수 없었다
+(`cmdproto.py` 의 `parse_info()` 가 `mode` 필드로 판별하던 이유다). 이제 PID 로 구분된다.
+
+실측 (2026-08-30, 부트 모드 강제 진입 후):
+
+```
+WEACT-H750-BOOT:
+  Product ID: 0xb751
+  Vendor ID: 0x1209
+  Manufacturer: BARAM
+/Volumes/H750BOOT     <- MSC 볼륨 마운트 확인
+```
+
+호스트 툴(`cmdproto.py` 의 `HidTransport`)은 `0x1209` + `B750/B751/B752` 세 PID 를
+순서대로 시도한다. 어느 상태로 열거돼 있든 잡힌다.

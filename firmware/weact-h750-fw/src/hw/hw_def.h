@@ -107,9 +107,10 @@
 #define      HW_USE_CDC             1
 #define      HW_USE_MSC             1
 #define      HW_USE_HID             1
-#define      HW_USB_VID             0xCAFE
-#define      HW_USB_PID             0xB010        // CDC + HID
-#define      HW_USB_PID_MSC         0xB011        // CDC + HID + MSC (더블탭 시)
+#define      HW_USB_VID             0x1209        // pid.codes (오픈소스 하드웨어용 공용 VID)
+#define      HW_USB_PID             0xB752        // 앱. 부트로더(B750/B751)와 반드시 달라야
+                                                 // 호스트가 지금 어느 쪽인지 USB 만으로 안다.
+#define      HW_USB_PID_MSC         0xB752        // 앱은 MSC 를 열지 않는다 (9단계에서 제거)
 
 #define _USE_HW_CMD
 #define      HW_CMD_MAX_DATA_LENGTH 1024

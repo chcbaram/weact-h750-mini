@@ -100,10 +100,30 @@ class HidTransport:
     RPT = 64
     PAYLOAD = RPT - 1
 
-    def __init__(self, vid=0xCAFE, pid=0xB003):
+    # pid.codes VID 와 이 보드가 쓰는 PID 세 개.
+    #   B750 부트로더(CDC+HID) / B751 부트로더(+MSC) / B752 앱
+    # 어느 상태로 열거돼 있든 잡히게 순서대로 시도한다.
+    VID  = 0x1209
+    PIDS = (0xB750, 0xB751, 0xB752)
+
+    def __init__(self, vid=None, pid=None):
         import hid
+        vid = self.VID if vid is None else vid
+        pids = (pid,) if pid is not None else self.PIDS
+
         self.dev = hid.device()
-        self.dev.open(vid, pid)
+        last = None
+        for p in pids:
+            try:
+                self.dev.open(vid, p)
+                break
+            except (OSError, IOError) as e:
+                last = e
+        else:
+            raise SystemExit(
+                f"HID 장치를 찾지 못했다. VID 0x{vid:04X}, PID "
+                + "/".join(f"0x{p:04X}" for p in pids)
+                + f"\n  ({last})")
         self.dev.set_nonblocking(1)
         self.buf = bytearray()
 

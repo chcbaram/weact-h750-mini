@@ -34,7 +34,7 @@ def open_channel(args):
         return CmdChannel(TcpTransport(args.tcp))
 
     if args.hid:
-        return CmdChannel(HidTransport(vid=0xCAFE, pid=0xB003))
+        return CmdChannel(HidTransport())
 
     import serial
     port = args.port

@@ -107,9 +107,15 @@
 #define      HW_USE_CDC             1
 #define      HW_USE_MSC             1
 #define      HW_USE_HID             1
-#define      HW_USB_VID             0xCAFE
-#define      HW_USB_PID             0xB010        // CDC + HID
-#define      HW_USB_PID_MSC         0xB011        // CDC + HID + MSC (더블탭 시)
+#define      HW_USB_VID             0x1209        // pid.codes (오픈소스 하드웨어용 공용 VID)
+#define      HW_USB_PID             0xB750        // CDC + HID
+#define      HW_USB_PID_MSC         0xB751        // CDC + HID + MSC (더블탭 시)
+//
+// 0xCAFE 는 TinyUSB 예제용 값이라 아무에게도 할당되지 않았다. 같은 값을 쓰는 다른
+// TinyUSB 장치와 충돌한다. 0x1209 는 오픈소스 하드웨어용 정식 VID 다.
+// PID 는 pid.codes 레지스트리와 대조해 비어 있는 대역으로 골랐다
+// (1209:B010 은 이미 남이 등록했다). B750/B751 = 부트로더, B752 = 아두이노 스케치.
+// 아직 등록 PR 은 올리지 않았다 - "비어 있지만 내 것도 아닌" 상태다.
 
 #define _USE_HW_CMD
 #define      HW_CMD_MAX_DATA_LENGTH 1024

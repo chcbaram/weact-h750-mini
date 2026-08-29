@@ -76,7 +76,7 @@ uint8_t const *tud_descriptor_device_cb(void)
  *    그래서 이 부트로더 전용으로 **0xFF75 / usage 0x01** 을 쓴다.
  *
  * 호스트 툴의 매칭 조건 (셋 다 봐야 한다):
- *    VID 0xCAFE + PID 0xB010(또는 0xB011) + usage page 0xFF75
+ *    VID 0x1209 + PID 0xB752 + usage page 0xFF75
  * 보드가 여러 종류로 늘어나면 usage page 는 그대로 두고 PID 로 구분한다.
  * 그러면 툴 하나로 모든 baram 부트로더를 찾되 키보드와는 절대 안 겹친다.
  */
