@@ -355,6 +355,40 @@ indirect 가 아니라 **memory-mapped 역참조**다. 부트로더가 QUADSPI �
 앱은 `resetConfirmBoot()` 도 부른다(`HW_BOOT_CONFIRM_MS` = 3초 생존 시). 그래서
 부트로더의 `HW_BOOT_TRY_MAX` 를 켤 수 있는 **첫 앱**이다.
 
+## 1200bps 터치
+
+아두이노 계열 툴(`arduino-cli`, `baramdl`)이 쓰는 관례다. 앱이 이 훅을 갖고 있으면
+호스트가 **포트를 1200 보율로 열었다 닫는 것만으로** 부트로더에 들어갈 수 있다.
+
+```c
+#if HW_DEV_MODE == HW_DEV_MODE_APP
+void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
+{
+  if (dtr == false && cdcGetBaud() == 1200)
+    resetToBoot(false);
+}
+#endif
+```
+
+TinyUSB 의 weak 심볼을 덮어쓰므로 등록 코드가 필요 없다.
+
+세 가지가 중요하다.
+
+- **여는 순간이 아니라 닫을 때 판정한다.** 여는 시점에는 아직 line coding 이
+  설정되지 않았을 수 있다
+- **`MODE_BIT_MSC` 를 세우지 않는다.** 부트로더가 CDC+HID 로만(PID `0xB750`)
+  열거되고 UF2 볼륨은 뜨지 않는다. 업로드할 때마다 Finder 가 뜨고 매번 꺼내기를
+  해야 하면 성가시다. UF2 가 필요하면 리셋 더블탭으로 사용자가 직접 들어간다
+- **부트로더 빌드에는 넣지 않는다.** 이미 부트로더인데 또 리셋할 이유가 없고,
+  CLI 를 1200 보율로 여는 사람이 있으면 애먼 리셋이 걸린다
+
+실측 (2026-08-30) : 7회 반복, **7 / 0**. `0xB752` → `0xB750`, MSC 볼륨 없음.
+
+> **시험할 때 포트를 잘못 고르지 말 것.** 이 보드는 ST-LINK VCP 도 함께
+> 열거되므로 `/dev/cu.usbmodem*` 중 아무거나 열면 안 된다. `system_profiler` 로
+> **Location ID** 를 읽어 그 접두사로 골라야 한다. 처음에 이걸 안 하고 0/5 가
+> 나와서 펌웨어를 의심했는데, 시험 스크립트가 ST-LINK 포트를 열고 있었다.
+
 ## 빌드 결과
 
 ```

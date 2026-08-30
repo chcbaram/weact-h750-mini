@@ -2,6 +2,7 @@
 
 #ifdef _USE_HW_CDC
 #include "usb/usb.h"
+#include "reset.h"
 #include "tusb.h"
 
 
@@ -97,5 +98,41 @@ uint8_t cdcGetType(void)
 
   return USB_CON_CDC;
 }
+
+#if HW_DEV_MODE == HW_DEV_MODE_APP
+/*
+ * 1200bps 터치.
+ *
+ * 아두이노 계열 툴(arduino-cli, baramdl)이 쓰는 관례다.
+ *
+ *   호스트가 1200 보율로 포트를 열었다 닫는다
+ *     -> DTR 해제 + line coding 이 1200
+ *     -> 앱이 부트 요청을 남기고 리셋한다
+ *     -> 부트로더가 잔류하고, 호스트는 다시 나타난 포트로 굽는다
+ *
+ * `MODE_BIT_MSC` 는 세우지 않는다. 즉 부트로더가 **CDC+HID 로만**(PID 0xB750)
+ * 열거되고 UF2 볼륨은 뜨지 않는다. 업로드할 때마다 Finder 가 뜨고 매번
+ * 꺼내기를 해야 하면 성가시기 때문이다. UF2 가 필요하면 리셋 더블탭으로
+ * 사용자가 직접 들어간다.
+ *
+ * **부트로더 빌드에는 이 훅이 없다.** 이미 부트로더인데 또 리셋할 이유가 없고,
+ * CLI 를 1200 보율로 여는 사람이 있으면 애먼 리셋이 걸린다.
+ *
+ * TinyUSB 의 weak 심볼을 덮어쓰는 방식이라 등록 코드가 따로 필요 없다.
+ */
+void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
+{
+  (void)itf;
+  (void)rts;
+
+  //-- 열 때가 아니라 **닫을 때** 판정한다. 여는 순간에는 아직 보율이
+  //   설정되지 않았을 수 있다.
+  if (dtr == false && cdcGetBaud() == 1200)
+  {
+    logPrintf("[  ] 1200bps touch -> boot\n");
+    resetToBoot(false);
+  }
+}
+#endif
 
 #endif
