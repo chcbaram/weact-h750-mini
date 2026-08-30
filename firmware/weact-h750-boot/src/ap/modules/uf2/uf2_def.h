@@ -57,7 +57,10 @@
 //   MAX_FW_SIZE 가 4KB 배수가 아니므로 **올림**해야 한다. 내림하면 마지막 섹터를
 //   덮는 비트가 erase_map 밖으로 나간다.
 #define UF2_ERASE_SECTOR_SIZE     4096
-#define UF2_ERASE_SECTOR_MAX      ((UF2_MAX_FW_SIZE + UF2_ERASE_SECTOR_SIZE - 1) / UF2_ERASE_SECTOR_SIZE)
+#define UF2_ERASE_BLOCK_SIZE      65536
+//-- 비트맵은 **플래시 절대 64KB 블록 번호**로 잡는다 (uf2.c 주석 참고).
+//   앱 오프셋이 아니라 0x90000000 기준이므로 QSPI 전체 블록 수다.
+#define UF2_ERASE_BLOCK_MAX       (HW_QSPI_SIZE / UF2_ERASE_BLOCK_SIZE)
 
 
 //-- 상태머신 대기 시간

@@ -328,10 +328,6 @@ bool qspiErase(uint32_t addr, uint32_t length)
 {
   bool ret = true;
   uint32_t flash_length;
-  uint32_t block_size;
-  uint32_t block_begin;
-  uint32_t block_end;
-  uint32_t i;
 
 
   assert(qspiGetXipMode() == false);
@@ -345,14 +341,13 @@ bool qspiErase(uint32_t addr, uint32_t length)
    *   BSP_QSPI_Erase_Block()  -> SUBSECTOR_ERASE_CMD (0x20)  =  4KB
    *   BSP_QSPI_Erase_Sector() -> SECTOR_ERASE_CMD    (0xD8)  = 64KB
    *
-   * 원본은 block_size 를 SECTOR_SIZE(64KB)로 잡고 qspiEraseSector()(=64KB)를
-   * 불렀다. 그러면 flashErase(0x90000000, 4096) 이 태그 4KB 가 아니라 64KB 를
-   * 지워버려 앱의 벡터 테이블과 코드 앞부분까지 날아간다.
-   * 태그를 독립 4KB 섹터에 둔 설계(00 문서)가 통째로 무너진다.
+   * 원본은 SECTOR_SIZE(64KB) 단위로만 지웠다. 그러면 flashErase(0x90000000, 4096)
+   * 이 태그 4KB 가 아니라 64KB 를 지워버려 앱의 벡터 테이블과 코드 앞부분까지
+   * 날아간다. 태그를 독립 4KB 섹터에 둔 설계(00 문서)가 통째로 무너진다.
+   *
+   * 그렇다고 4KB 로만 지우면 큰 이미지에서 느리다. 아래에서 둘을 섞는다.
    */
   flash_length = W25Q64JV_FLASH_SIZE;
-  block_size   = W25Q64JV_SUBSECTOR_SIZE;      // 0x1000 = 4KB
-
 
   if ((addr > flash_length) || ((addr+length) > flash_length))
   {
@@ -363,17 +358,43 @@ bool qspiErase(uint32_t addr, uint32_t length)
     return false;
   }
 
-
-  block_begin = addr / block_size;
-  block_end   = (addr + length - 1) / block_size;
-
-
-  for (i=block_begin; i<=block_end; i++)
+  /*
+   * 4KB 섹터와 64KB 블록을 섞어 쓴다.
+   *
+   * 지우기가 업로드 시간의 대부분이다. 실측(아두이노 세션, 242KB 이미지):
+   *
+   *   총 4.92s = 전송 0.9s + **지우기 4.02s**   (60섹터 x 67ms)
+   *
+   * 4KB 섹터는 typ 45ms, 64KB 블록은 typ 150ms 다. 같은 64KB 를 지우는 데
+   * 섹터 16개면 720ms, 블록 하나면 150ms — **4.8배** 차이다.
+   *
+   * 그래서 **요청 범위 안에 온전히 들어가는 64KB 블록만** 블록으로 지우고,
+   * 앞뒤 자투리는 4KB 섹터로 지운다.
+   *
+   * **범위 밖은 절대 지우지 않는다.** 이 함수는 태그 섹터 하나(4KB)만 지우는
+   * 데도 쓰인다(FW_BEGIN). 꼬리를 64KB 로 올려버리면 그 호출이 앱 본체를
+   * 통째로 날린다. 범위를 넓히고 싶으면 **호출자가** 그렇게 요청해야 한다.
+   */
   {
-    ret = qspiEraseBlock(block_size*i);      // 0x20 = 4KB (이름에 속지 말 것)
-    if (ret == false)
+    const uint32_t sec = W25Q64JV_SUBSECTOR_SIZE;   // 0x1000  4KB
+    const uint32_t blk = W25Q64JV_SECTOR_SIZE;      // 0x10000 64KB
+    uint32_t addr_s = addr & ~(sec - 1);                        // 4KB 로 내림
+    uint32_t addr_e = (addr + length + sec - 1) & ~(sec - 1);   // 4KB 로 올림
+    uint32_t cur    = addr_s;
+
+    ret = true;
+    while (cur < addr_e && ret == true)
     {
-      break;
+      if (((cur & (blk - 1)) == 0) && ((cur + blk) <= addr_e))
+      {
+        ret = qspiEraseSector(cur);   // 0xD8 = 64KB (이름에 속지 말 것)
+        cur += blk;
+      }
+      else
+      {
+        ret = qspiEraseBlock(cur);    // 0x20 = 4KB
+        cur += sec;
+      }
     }
   }
 

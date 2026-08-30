@@ -205,9 +205,37 @@ bool cmdBootProcess(cmd_t *p_cmd)
       {
         err_code = ERR_BOOT_WRONG_CMD;
       }
-      else if (flashErase(FLASH_ADDR_FIRM_VEC, (uint32_t)wr_length) != true)
+      else
       {
-        err_code = ERR_BOOT_FLASH_ERASE;
+        /*
+         * **64KB 정렬 범위로 넓혀서 요청한다.** 그래야 qspiErase() 가 전부
+         * 64KB 블록으로 지운다. 실측으로 업로드의 대부분이 지우기였다.
+         *
+         *   242KB 이미지 : 총 4.92s = 전송 0.9s + **지우기 4.02s**
+         *
+         * 0x90001000 부터 요청하면 시작이 64KB 정렬이 아니라 앞 15섹터가
+         * 4KB 로 떨어져 이득이 절반으로 준다. 그래서 **태그 섹터를 포함해
+         * `FLASH_ADDR_FIRM`(0x90000000, 64KB 정렬)부터** 요청한다.
+         *
+         * 두 가지가 안전을 보장한다.
+         *   - 태그는 바로 위 FW_BEGIN 이 이미 지웠다. 다시 지워도 무해하고
+         *     어차피 FW_END 에서 새로 쓴다
+         *   - 꼬리를 64KB 로 올리는 것은 앱 영역의 빈 공간을 더 지우는 것뿐이다.
+         *     어차피 이 전송이 덮어쓸 자리다
+         *
+         * qspiErase() 자체는 요청 범위를 넘지 않는다. 넓히는 판단은 **여기서**
+         * 한다 — 태그 하나만 지우는 FW_BEGIN 이 앱을 날리면 안 되기 때문이다.
+         */
+        const uint32_t blk = 0x10000;
+        uint32_t len = FLASH_SIZE_TAG + (uint32_t)wr_length;
+
+        len = (len + blk - 1) & ~(blk - 1);
+        if (len > FLASH_SIZE_FIRM) len = FLASH_SIZE_FIRM;
+
+        if (flashErase(FLASH_ADDR_FIRM, len) != true)
+        {
+          err_code = ERR_BOOT_FLASH_ERASE;
+        }
       }
       cmdSendResp(p_cmd, cmd, err_code, NULL, 0);
       break;

@@ -15,10 +15,11 @@ static uint32_t tr_family    = 0;
 static uint32_t flash_len    = 0;     // 기록된 최대 끝 오프셋
 static uint8_t  percent      = 0;
 
-static uint8_t  erase_map[(UF2_ERASE_SECTOR_MAX + 7) / 8];   // 올림. 내림하면 마지막 섹터에서 넘친다
+static uint8_t  erase_map[(UF2_ERASE_BLOCK_MAX + 7) / 8];   // 플래시 절대 64KB 블록 번호 기준
 
 
 static void uf2TransferReset(WriteState *state);
+static bool uf2FlashIsBlank(uint32_t addr, uint32_t size);
 static bool uf2FlashEraseOnce(uint32_t offset, uint32_t len);
 static bool uf2FlashWrite(uint32_t target_addr, void const *data, uint32_t len);
 static bool uf2FlashFlush(void);
@@ -66,29 +67,73 @@ void uf2TransferReset(WriteState *state)
   percent   = 0;
 }
 
+static bool uf2FlashIsBlank(uint32_t addr, uint32_t size)
+{
+  uint8_t buf[256];
+
+  for (uint32_t i=0; i<size; i+=sizeof(buf))
+  {
+    uint32_t len = size - i;
+
+    if (len > sizeof(buf)) len = sizeof(buf);
+    if (flashRead(addr + i, buf, len) != true) return false;
+
+    for (uint32_t j=0; j<len; j++)
+    {
+      if (buf[j] != 0xFF) return false;
+    }
+  }
+  return true;
+}
+
 /*
- * 섹터를 전송당 한 번만 지운다.
+ * 지우기를 전송당 한 번만 한다. **64KB 블록 단위**다.
  *
- * UF2 블록은 순서가 뒤죽박죽으로 올 수 있고 같은 섹터에 여러 블록이 들어간다.
- * 매번 지우면 앞서 쓴 내용이 날아간다.
+ * UF2 블록은 순서가 뒤죽박죽으로 오고 같은 영역에 여러 블록이 들어간다.
+ * 매번 지우면 앞서 쓴 내용이 날아가므로 비트맵으로 한 번만 지운다.
+ *
+ * **비트맵을 앱 오프셋이 아니라 플래시 절대 블록 번호로 잡는 것이 핵심이다.**
+ *
+ *   앱 영역은 0x90001000 에서 시작한다. 플래시의 64KB 격자와 0x1000 어긋나 있어서,
+ *   앱 오프셋 기준으로 64KB 를 요청하면 시작 주소가 64KB 정렬이 아니게 되고
+ *   qspiErase() 가 결국 전부 4KB 로 쪼갠다. 실제로 그렇게 짰다가 이득이 0 인 것을
+ *   확인했다.
+ *
+ *   그래서 **플래시 자신의 64KB 격자**(0x90000000 기준)로 지운다. 블록 0 은
+ *   태그(0x90000000~0x90001000)를 포함하는데, **함께 지우는 것이 오히려 안전하다.**
+ *   전송이 중간에 끊기면 태그가 없어 부트로더가 반쯤 쓰인 이미지로 점프하지
+ *   않는다. cmd 경로의 FW_BEGIN 이 하는 일과 같고, uf2FlashFlush() 가 마지막에
+ *   새로 쓴다.
+ *
+ * 4KB 섹터 16개 = 720ms, 64KB 블록 1개 = 150ms 로 4.8배 차이다(typ).
+ * 비트맵도 254B 에서 16B 로 준다.
+ *
+ * convex 는 QSPI 가 XiP 가 아니라 스테이징 버퍼라 앞에 태그가 없고, 그래서
+ * 처음부터 64KB 로 지운다. 우리는 배치가 달라 위 우회가 필요하다.
  */
 bool uf2FlashEraseOnce(uint32_t offset, uint32_t len)
 {
-  uint32_t sector_s = offset / UF2_ERASE_SECTOR_SIZE;
-  uint32_t sector_e = (offset + len - 1) / UF2_ERASE_SECTOR_SIZE;
+  const uint32_t blk = UF2_ERASE_BLOCK_SIZE;
+  uint32_t abs_s = FLASH_SIZE_TAG + offset;              // 0x90000000 기준 오프셋
+  uint32_t abs_e = abs_s + len - 1;
+  uint32_t blk_s = abs_s / blk;
+  uint32_t blk_e = abs_e / blk;
 
-  for (uint32_t i=sector_s; i<=sector_e; i++)
+  for (uint32_t i=blk_s; i<=blk_e; i++)
   {
     uint8_t  mask = 1 << (i % 8);
     uint32_t pos  = i / 8;
 
-    if (i >= UF2_ERASE_SECTOR_MAX) return false;
+    if (i >= UF2_ERASE_BLOCK_MAX) return false;
     if (erase_map[pos] & mask) continue;
 
-    if (flashErase(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + i * UF2_ERASE_SECTOR_SIZE,
-                   UF2_ERASE_SECTOR_SIZE) != true)
+    /*
+     * 이미 비어 있으면 건너뛴다. 64KB 지우기는 150ms 이상이고 blank 검사는
+     * 몇 ms 다. 새 칩이나 전체 소거 직후에 크게 이득이다. (convex 에서 가져왔다)
+     */
+    if (uf2FlashIsBlank(FLASH_ADDR_FIRM + i * blk, blk) != true)
     {
-      return false;
+      if (flashErase(FLASH_ADDR_FIRM + i * blk, blk) != true) return false;
     }
     erase_map[pos] |= mask;
   }
