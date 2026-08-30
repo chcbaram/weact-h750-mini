@@ -420,6 +420,29 @@ uint16_t bootJumpFirm(void)
     return ERR_BOOT_INVALID_FW;
   }
 
+  /*
+   * MSP 를 설정하지 않고 분기한다. 앱 startup 의 첫 명령어가
+   *
+   *   Reset_Handler:  ldr sp, =_estack
+   *
+   * 이라 스택을 스스로 잡기 때문이다. 아두이노 코어의
+   * startup_stm32h750xx.s 도 그렇다(확인함).
+   *
+   * **RTOS 를 켜면(main.c 의 _USE_HW_RTOS 분기) 이게 버그가 된다.**
+   *   여기가 태스크 컨텍스트면 CONTROL.SPSEL=1 이고, 그 상태로 넘기면 앱의
+   *   `ldr sp, =_estack` 이 MSP 가 아니라 **PSP** 를 잡는다. 그러면 앱의 모든
+   *   예외 핸들러가 부트로더의 낡은 MSP 위에서 돌면서 앱 .bss 를 갉아먹는다.
+   *   증상이 "특정 변수 배치에서만 죽는다" 로 나와서 원인을 짚기 어렵다.
+   *
+   *   그때는 분기 직전에 이것이 필요하다 (지금은 불필요하고 미검증이라 넣지 않는다):
+   *
+   *     __set_CONTROL(0);
+   *     __ISB();
+   *     __set_MSP(vec0);        // 벡터 word[0] = 앱의 초기 MSP
+   *
+   *   vec0 은 bootIsValidVector() 가 이미 RAM 범위로 검증하는 값이다.
+   *   다른 세션(hancheol-5a)이 지적했다. 12 문서 참고.
+   */
   app_entry();
 
   return OK;    // 여기 오면 안 된다

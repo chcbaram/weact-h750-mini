@@ -26,10 +26,43 @@ QSPI 에서 XiP 로 실행되는 애플리케이션이 지켜야 할 것과, 부
 | GPIO 클럭 | A, B, C, D, E, H **ON** |
 | 캐시 | I-Cache, D-Cache **ON** |
 | MPU | 활성 (`MPU_CTRL = 0x5`, ENABLE + PRIVDEFENA). 리전 표는 03 문서 |
-| MSP | **설정하지 않는다.** 앱 `Reset_Handler` 의 `ldr sp, =_estack` 이 잡는다 |
+| MSP | **설정하지 않는다.** 앱 `Reset_Handler` 의 `ldr sp, =_estack` 이 잡는다<br>(**단, 부트로더에 RTOS 를 켜면 조건이 깨진다 — 아래 참고**) |
 | VTOR | **건드리지 않는다.** 앱 `SystemInit()` 이 옮긴다 |
 | CONTROL | 0. 앱은 처음부터 끝까지 **MSP** 로 돈다 (PSP 미사용) |
 | NVIC | 점프 직전 전부 disable + clear, SysTick 정지, 캐시 clean/invalidate |
+
+### 조건부 — 부트로더에 RTOS 를 켜면 MSP/CONTROL 을 넘겨야 한다
+
+지금은 `_USE_HW_RTOS` 가 어디에도 정의돼 있지 않아 `main()` 이 베어메탈 분기를 타고,
+`CONTROL = 0` 이므로 앱의 `ldr sp, =_estack` 이 **MSP** 를 잡는다. 그래서 부트로더가
+MSP 를 설정하지 않아도 무해하다.
+
+**`main.c` 의 `#ifdef _USE_HW_RTOS` 분기를 켜는 순간 이것이 버그가 된다.**
+
+`bootJumpFirm()` 이 태스크 컨텍스트에서 불리면 `CONTROL.SPSEL = 1` 이다. 그 상태로
+넘기면 앱의 `ldr sp, =_estack` 이 MSP 가 아니라 **PSP** 를 잡는다. 결과:
+
+- 앱의 스레드 코드는 PSP(정상 위치)에서 돈다 — 겉보기엔 잘 동작한다
+- 그런데 **모든 예외/인터럽트 핸들러는 MSP 를 쓴다.** 그 MSP 는 부트로더가
+  남긴 낡은 값이다
+- 부트로더와 앱의 `_estack` 이 **둘 다 `0x24080000`** 이라 그 낡은 MSP 는
+  앱의 스택 영역 한복판을 가리키고, 인터럽트가 뜰 때마다 그 아래를 밟는다
+- 증상이 **"특정 변수 배치에서만 죽는다"** 로 나온다. 원인을 짚기 대단히 어렵다
+
+켤 때 필요한 코드는 이것이다 (`qspiSetXipMode(true)` 다음, `app_entry()` 직전).
+
+```c
+__set_CONTROL(0);
+__ISB();
+__set_MSP(vec0);          // 벡터 word[0] = 앱의 초기 MSP
+```
+
+`vec0` 은 `bootIsValidVector()` 가 이미 RAM 범위로 검증하는 값이라 따로 검사할
+필요는 없다. **지금은 불필요하고 미검증이므로 코드로 넣지 않았다** — 점프 경로는
+이 프로젝트에서 가장 예민한 부분이라, RTOS 를 실제로 켤 때 실기 검증과 함께 넣는다.
+`boot.c` 의 `app_entry()` 직전에 같은 내용을 주석으로 남겨 두었다.
+
+다른 세션(`hancheol-5a`)이 지적했다.
 
 ### 메모리 속성 실측 (2026-08-30, 앱 실행 중 SWD 덤프)
 
