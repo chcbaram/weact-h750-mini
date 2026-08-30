@@ -328,10 +328,6 @@ bool qspiErase(uint32_t addr, uint32_t length)
 {
   bool ret = true;
   uint32_t flash_length;
-  uint32_t block_size;
-  uint32_t block_begin;
-  uint32_t block_end;
-  uint32_t i;
 
 
   assert(qspiGetXipMode() == false);
@@ -345,14 +341,13 @@ bool qspiErase(uint32_t addr, uint32_t length)
    *   BSP_QSPI_Erase_Block()  -> SUBSECTOR_ERASE_CMD (0x20)  =  4KB
    *   BSP_QSPI_Erase_Sector() -> SECTOR_ERASE_CMD    (0xD8)  = 64KB
    *
-   * 원본은 block_size 를 SECTOR_SIZE(64KB)로 잡고 qspiEraseSector()(=64KB)를
-   * 불렀다. 그러면 flashErase(0x90000000, 4096) 이 태그 4KB 가 아니라 64KB 를
-   * 지워버려 앱의 벡터 테이블과 코드 앞부분까지 날아간다.
-   * 태그를 독립 4KB 섹터에 둔 설계(00 문서)가 통째로 무너진다.
+   * 원본은 SECTOR_SIZE(64KB) 단위로만 지웠다. 그러면 flashErase(0x90000000, 4096)
+   * 이 태그 4KB 가 아니라 64KB 를 지워버려 앱의 벡터 테이블과 코드 앞부분까지
+   * 날아간다. 태그를 독립 4KB 섹터에 둔 설계(00 문서)가 통째로 무너진다.
+   *
+   * 그렇다고 4KB 로만 지우면 큰 이미지에서 느리다. 아래에서 둘을 섞는다.
    */
   flash_length = W25Q64JV_FLASH_SIZE;
-  block_size   = W25Q64JV_SUBSECTOR_SIZE;      // 0x1000 = 4KB
-
 
   if ((addr > flash_length) || ((addr+length) > flash_length))
   {
@@ -363,17 +358,43 @@ bool qspiErase(uint32_t addr, uint32_t length)
     return false;
   }
 
-
-  block_begin = addr / block_size;
-  block_end   = (addr + length - 1) / block_size;
-
-
-  for (i=block_begin; i<=block_end; i++)
+  /*
+   * 4KB 섹터와 64KB 블록을 섞어 쓴다.
+   *
+   * 지우기가 업로드 시간의 대부분이다. 실측(아두이노 세션, 242KB 이미지):
+   *
+   *   총 4.92s = 전송 0.9s + **지우기 4.02s**   (60섹터 x 67ms)
+   *
+   * 4KB 섹터는 typ 45ms, 64KB 블록은 typ 150ms 다. 같은 64KB 를 지우는 데
+   * 섹터 16개면 720ms, 블록 하나면 150ms — **4.8배** 차이다.
+   *
+   * 그래서 **요청 범위 안에 온전히 들어가는 64KB 블록만** 블록으로 지우고,
+   * 앞뒤 자투리는 4KB 섹터로 지운다.
+   *
+   * **범위 밖은 절대 지우지 않는다.** 이 함수는 태그 섹터 하나(4KB)만 지우는
+   * 데도 쓰인다(FW_BEGIN). 꼬리를 64KB 로 올려버리면 그 호출이 앱 본체를
+   * 통째로 날린다. 범위를 넓히고 싶으면 **호출자가** 그렇게 요청해야 한다.
+   */
   {
-    ret = qspiEraseBlock(block_size*i);      // 0x20 = 4KB (이름에 속지 말 것)
-    if (ret == false)
+    const uint32_t sec = W25Q64JV_SUBSECTOR_SIZE;   // 0x1000  4KB
+    const uint32_t blk = W25Q64JV_SECTOR_SIZE;      // 0x10000 64KB
+    uint32_t addr_s = addr & ~(sec - 1);                        // 4KB 로 내림
+    uint32_t addr_e = (addr + length + sec - 1) & ~(sec - 1);   // 4KB 로 올림
+    uint32_t cur    = addr_s;
+
+    ret = true;
+    while (cur < addr_e && ret == true)
     {
-      break;
+      if (((cur & (blk - 1)) == 0) && ((cur + blk) <= addr_e))
+      {
+        ret = qspiEraseSector(cur);   // 0xD8 = 64KB (이름에 속지 말 것)
+        cur += blk;
+      }
+      else
+      {
+        ret = qspiEraseBlock(cur);    // 0x20 = 4KB
+        cur += sec;
+      }
     }
   }
 
@@ -549,15 +570,15 @@ uint8_t BSP_QSPI_Init(void)
 
   /* QSPI initialization */
   /*
-   * QSPI 커널 클럭은 PLL2R = 200MHz (bsp.c 의 PeriphCommonClock_Config).
+   * QSPI 커널 클럭은 D1HCLK = 200MHz (bsp.c 의 PeriphCommonClock_Config).
    * ClockPrescaler = 1 -> 200 / (1+1) = 100MHz.
    *
    * W25Q64JV 의 Fast Read Quad I/O(0xEB) 는 규격상 133MHz 까지지만, 이 보드는
    * QSPI 라인마다 33R 직렬 저항(R30~R35)이 붙어 있어 엣지가 둔하다.
    * 100MHz 는 실기에서 memory-mapped 읽기로 검증한 값이다.
    *
-   * PLL1(SYSCLK)이 아니라 PLL2 에서 뽑는 이유는 bsp.c 주석 참고.
-   * 앱이 클럭을 바꿔도 XiP 타이밍이 흔들리지 않아야 한다.
+   * PLL2 가 아니라 D1HCLK 을 쓰는 이유는 bsp.c 주석 참고.
+   * 앱의 SystemInit() 이 PLL2 를 꺼버리기 때문이다.
    *
    * W25Q64JV 는 quad 읽기에서 133MHz 까지 되지만, 이 보드는 QSPI 라인마다
    * 33R 직렬 저항(R30~R35)이 붙어 있어 파형이 둔하다. 50MHz 로 시작해서
@@ -983,28 +1004,29 @@ uint8_t BSP_QSPI_EnableMemoryMappedMode(void)
   s_command.AddressSize        = QSPI_ADDRESS_24_BITS;
   s_command.AlternateByteMode  = QSPI_ALTERNATE_BYTES_4_LINES;
   s_command.AlternateBytesSize = QSPI_ALTERNATE_BYTES_8_BITS;
+  /*
+   * AlternateBytes = 0x20 은 M5:M4 = 10b, 즉 플래시를 **연속 읽기 모드**에 넣는다.
+   * 그 모드에서는 다음 읽기에 0xEB 오피코드를 보내면 안 된다.
+   *
+   * 따라서 SIOOMode 를 **INST_ONLY_FIRST_CMD** 로 해야 짝이 맞는다.
+   * INST_EVERY_CMD 로 두면 QUADSPI 가 매번 0xEB 를 보내고 플래시는 그것을 주소
+   * 비트로 해석해 쓰레기를 돌려준다.
+   *
+   * 증상이 고약하다. 순차 버스트는 명령 하나로 끝나므로 멀쩡히 읽히고
+   * (자체 시험의 4KB 훑기도 통과했다), **랜덤 액세스만 깨진다.**
+   * 그래서 앱으로 점프한 뒤 명령어 인출에서만 터졌다
+   * (CFSR=0x00010000 UNDEFINSTR, PC=ExitRun0Mode 의 정상 명령어 위치).
+   *
+   * stm32h7-wifi 의 FSBL(실제로 XiP 점프에 성공하는 레퍼런스)도 이 조합이다.
+   */
   s_command.AlternateBytes     = (1 << 5);
 
   s_command.DataMode          = QSPI_DATA_4_LINES;
   s_command.DummyCycles       = W25Q64JV_DUMMY_CYCLES_READ_QUAD;
   s_command.DdrMode           = QSPI_DDR_MODE_DISABLE;
   s_command.DdrHoldHalfCycle  = QSPI_DDR_HHC_ANALOG_DELAY;
-  s_command.SIOOMode          = QSPI_SIOO_INST_EVERY_CMD;
+  s_command.SIOOMode          = QSPI_SIOO_INST_ONLY_FIRST_CMD;
 
-  /*
-   * 타임아웃 카운터를 켜야 한다.
-   *
-   * 끄면(구조체 {0} 초기화의 기본값) 마지막 읽기 뒤에도 nCS 가 계속 눌린 채로
-   * 남는다. 그 상태에서 indirect 로 내려가 소거/쓰기를 하고 다시 올라오면
-   * 플래시가 이전 읽기 시퀀스 한가운데에 있다고 판단해 **첫 읽기가 통째로
-   * 어긋난다.**
-   *
-   * 실기에서 재현됨 : 태그를 쓴 직후 0x90000000 을 읽으면 전부 0xFF, 손대지도
-   * 않은 0x90001000 의 CRC 도 E848(정답 8205)로 나왔다. 한 번 더 읽으면 정상.
-   * SCK 를 50MHz 로 낮춰도 동일했으므로 신호 무결성 문제가 아니다.
-   *
-   * stm32h7-wifi 의 OCTOSPI 드라이버도 같은 값을 쓴다.
-   */
   s_mem_mapped_cfg.TimeOutActivation = QSPI_TIMEOUT_COUNTER_ENABLE;
   s_mem_mapped_cfg.TimeOutPeriod     = 0x20;
 
@@ -1063,6 +1085,25 @@ static uint8_t QSPI_ResetMemory(QSPI_HandleTypeDef *p_hqspi)
   if (HAL_QSPI_Command(p_hqspi, &s_command, HAL_QPSI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
   {
     return QSPI_ERROR;
+  }
+
+  /*
+   * 소프트웨어 리셋(0x99) 후 칩이 복구될 시간을 준다.
+   *
+   * W25Q64JV 의 tRST 는 약 30us 다. 이 시간 안에는 어떤 명령도 받지 않는다.
+   * 원본은 바로 AutoPollingMemReady 로 넘어가는데, 그 폴링이 리셋 중인 칩에서
+   * 쓰레기를 읽고 "준비됨" 으로 통과해 버린다.
+   *
+   * 그 결과 memory-mapped 재진입 직후 **첫 읽기가 어긋난다.** 실기에서
+   * 앱으로 점프한 직후 명령어 인출이 쓰레기를 가져와 UNDEFINSTR 로 죽었다
+   * (CFSR=0x00010000, PC=ExitRun0Mode 의 정상 명령어 위치).
+   *
+   * HAL_Delay 를 쓰지 않는 이유 : 이 경로가 SysTick 이 없는 상황에서도 불릴 수
+   * 있다. 넉넉하게 바쁜 대기로 돈다.
+   */
+  for (volatile uint32_t i = 0; i < 20000; i++)
+  {
+    __NOP();
   }
 
   /* Configure automatic polling mode to wait the memory is ready */
