@@ -238,8 +238,17 @@ SCB 레지스터를 SWD 로 직접 읽을 때의 순서 (**`0xE000ED30` 은 MMFA
 | `0xE000ED28` | **CFSR** — bit0 IACCVIOL, bit1 DACCVIOL, bit7 MMARVALID, bit16 UNDEFINSTR |
 | `0xE000ED2C` | **HFSR** — bit30 FORCED(에스컬레이션), bit1 VECTTBL |
 | `0xE000ED30` | DFSR — 디버그용. halt 하면 값이 선다 |
-| `0xE000ED34` | **MMFAR** — CFSR bit7 이 서 있을 때만 유효. IACCVIOL 은 채우지 않는다 |
+| `0xE000ED34` | **MMFAR** — CFSR bit7(MMARVALID)이 설 때만 유효. IACCVIOL 은 채우지 않는다 |
+| `0xE000ED38` | **BFAR** — CFSR bit15(BFARVALID)가 설 때만 유효 |
+| `0xE000ED3C` | AFSR — 구현 정의. H7 에서는 쓰이지 않는다 |
 | `0xE000ED24` | SHCSR — bit0 MEMFAULTACT, bit16 MEMFAULTENA |
+| `0xE000ED04` | ICSR — VECTACTIVE[8:0] 로 지금 어느 예외 안인지 |
+
+```bash
+openocd -f tools/openocd/weact-h750.cfg -c init -c halt \
+  -c "mdw 0xE000ED28 6" -c "mdw 0xE000ED24" -c "mdw 0xE000ED04" -c resume -c shutdown
+#   -> CFSR HFSR DFSR MMFAR BFAR AFSR
+```
 
 ### 예외 스택 프레임은 32바이트가 아니라 **104바이트** 다
 
