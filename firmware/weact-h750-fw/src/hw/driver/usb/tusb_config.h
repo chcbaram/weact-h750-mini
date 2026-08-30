@@ -52,7 +52,9 @@ extern "C" {
 // bootUp() 이 정한 값(boot_with_msc)으로 고른다.
 //--------------------------------------------------------------------
 #define CFG_TUD_CDC             1
-#define CFG_TUD_MSC             1
+// 앱은 MSC 를 열지 않는다. UF2 로 굽는 것은 QUADSPI 를 indirect 로 내려야 하는
+// 작업이라 XiP 로 도는 앱에서는 불가능하다. 부트로더 전용이다.
+#define CFG_TUD_MSC             0
 #define CFG_TUD_HID             1
 #define CFG_TUD_MIDI            0
 #define CFG_TUD_VENDOR          0

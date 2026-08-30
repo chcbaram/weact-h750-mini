@@ -1,5 +1,51 @@
 #include "boot/boot.h"
 #include "cli.h"
+
+#if HW_DEV_MODE == HW_DEV_MODE_APP
+
+/*
+ * 앱 빌드에서는 이 파일이 **읽기 두 개로 줄어든다.**
+ *
+ * 앱은 QSPI 에서 XiP 로 실행 중이라 indirect 읽기를 쓸 수 없다.
+ * `qspiSetXipMode(false)` 를 부르는 순간 자기 명령어 인출이 끊긴다(04 문서).
+ * 대신 **memory-mapped 주소를 그냥 역참조**한다 — 읽기에는 그것으로 충분하고,
+ * 부트로더가 QUADSPI 를 memory-mapped 로 열어둔 채 넘겨주므로 항상 유효하다.
+ *
+ * 검증(`bootVerifyFirm`)과 점프(`bootJumpFirm`), 태그 승격(`bootPromoteTag`)은
+ * 앱에 존재할 이유가 없다. 앱이 할 수 있는 것은 `resetToBoot()` 으로 부트로더에
+ * 요청하는 것뿐이다.
+ */
+bool bootInit(void)
+{
+  return true;
+}
+
+bool bootGetTag(firm_tag_t *p_tag)
+{
+  memcpy(p_tag, (const void *)FLASH_ADDR_FIRM, sizeof(firm_tag_t));
+  return p_tag->magic_number == TAG_MAGIC_NUMBER;
+}
+
+bool bootGetVer(firm_ver_t *p_ver)
+{
+  memcpy(p_ver, (const void *)(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + FLASH_SIZE_VEC),
+         sizeof(firm_ver_t));
+  return p_ver->magic_number == VERSION_MAGIC_NUMBER;
+}
+
+BootImgType_t bootGetImgType(void)
+{
+  //-- 앱이 돌고 있다는 것 자체가 부트로더의 검증을 통과했다는 뜻이다.
+  firm_tag_t tag;
+  firm_ver_t ver;
+
+  if (bootGetTag(&tag) == true) return BOOT_IMG_TAG;
+  if (bootGetVer(&ver) == true) return BOOT_IMG_VER;
+  return BOOT_IMG_RAW;
+}
+
+#else   // HW_DEV_MODE_BOOT
+
 #include "ui/ui.h"
 
 
@@ -504,3 +550,5 @@ void cliBoot(cli_args_t *args)
   }
 }
 #endif
+
+#endif  // HW_DEV_MODE_APP

@@ -122,26 +122,20 @@ enum
   ITF_NUM_CDC = 0,
   ITF_NUM_CDC_DATA,
   ITF_NUM_HID,
-  ITF_NUM_MSC,
-  ITF_NUM_TOTAL_MSC,
+  ITF_NUM_TOTAL_NO_MSC,
 };
-#define ITF_NUM_TOTAL_NO_MSC    (ITF_NUM_MSC)
 
 #define EPNUM_CDC_NOTIF   0x81
 #define EPNUM_CDC_OUT     0x02
 #define EPNUM_CDC_IN      0x82
 #define EPNUM_HID_OUT     0x03
 #define EPNUM_HID_IN      0x83
-#define EPNUM_MSC_OUT     0x04
-#define EPNUM_MSC_IN      0x84
 
 #define CONFIG_LEN_NO_MSC  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
-#define CONFIG_LEN_MSC     (CONFIG_LEN_NO_MSC + TUD_MSC_DESC_LEN)
 
 //-- 문자열 인덱스
 #define STR_IDX_CDC   4
 #define STR_IDX_HID   5
-#define STR_IDX_MSC   6
 
 
 static uint8_t const desc_cfg_no_msc[] =
@@ -157,25 +151,17 @@ static uint8_t const desc_cfg_no_msc[] =
                            EPNUM_HID_OUT, EPNUM_HID_IN, CFG_TUD_HID_EP_BUFSIZE, 1),
 };
 
-static uint8_t const desc_cfg_msc[] =
-{
-  TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL_MSC, 0, CONFIG_LEN_MSC,
-                        TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
-
-  TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STR_IDX_CDC, EPNUM_CDC_NOTIF, 8,
-                     EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
-
-  TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID, STR_IDX_HID, HID_ITF_PROTOCOL_NONE,
-                           sizeof(desc_hid_report),
-                           EPNUM_HID_OUT, EPNUM_HID_IN, CFG_TUD_HID_EP_BUFSIZE, 1),
-
-  TUD_MSC_DESCRIPTOR(ITF_NUM_MSC, STR_IDX_MSC, EPNUM_MSC_OUT, EPNUM_MSC_IN, 64),
-};
-
+/*
+ * 앱에는 MSC 디스크립터가 없다 (`CFG_TUD_MSC 0`).
+ *
+ * 부트로더는 더블탭 여부에 따라 두 벌을 런타임에 골라 쓰지만, 앱은 UF2 를 쓸 수
+ * 없으므로(QUADSPI indirect 불가) 한 벌뿐이다. `usbDescInit(true)` 를 불러도
+ * CDC+HID 로 열거된다.
+ */
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
 {
   (void)index;
-  return is_with_msc ? desc_cfg_msc : desc_cfg_no_msc;
+  return desc_cfg_no_msc;
 }
 
 
@@ -238,7 +224,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
  */
 void usbDescInit(bool with_msc)
 {
-  is_with_msc = with_msc;
+  is_with_msc = with_msc;      // 앱에서는 디스크립터 선택에 쓰이지 않는다
 
   desc_device.idProduct = with_msc ? HW_USB_PID_MSC : HW_USB_PID;
 }

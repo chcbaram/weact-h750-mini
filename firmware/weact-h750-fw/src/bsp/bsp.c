@@ -48,7 +48,22 @@ bool bspInit(void)
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
 
-  bspMpuInit();
+  /*
+   * MPU 는 **다시 잡지 않는다.** 부트로더가 설정한 것을 그대로 물려받는다.
+   *
+   * `HAL_MPU_Disable()` 로 잠깐 끄는 순간 QSPI(0x90000000) 의 속성이 기본
+   * 메모리맵으로 돌아간다. 기본맵에서도 실행은 가능하므로 이론상 안전하지만,
+   * 앱은 바로 그 주소에서 명령어를 인출하는 중이다. 이 프로젝트에서 제일 예민한
+   * 경로에 불필요한 위험을 만들 이유가 없다.
+   *
+   * 부트로더 설정으로 충분하다 (03/12 문서).
+   *   R1  AXI SRAM   write-through, XN
+   *   R2  D2 SRAM1+2 non-cacheable, XN     <- .non_cache
+   *   R3  D2 SRAM3   non-cacheable, XN
+   *   R15 QSPI       write-through, **실행 허용**
+   *
+   * 속성을 바꿔야 하는 날이 오면 그때 되살린다. 함수는 남겨둔다.
+   */
 
   return true;
 }
@@ -59,8 +74,13 @@ bool bspInit(void)
  * 인터럽트를 전부 막지 않으면, 앱이 벡터 테이블(VTOR)을 옮기기 전에 남아 있던
  * 인터럽트가 떠서 부트로더의 핸들러 주소로 뛰어버린다.
  *
- * MPU 는 여기서 끄지 않는다. 앱이 자기 bspInit() 에서 다시 설정하고, 그 전까지는
- * QSPI 영역이 실행 가능해야 하기 때문이다.
+ * MPU 는 여기서 끄지 않는다. QSPI 영역이 실행 가능한 채로 넘어가야 앱의 첫
+ * 명령어를 인출할 수 있기 때문이다.
+ *
+ * **앱은 MPU 를 물려받아 그대로 쓴다.** 아두이노 코어에는 MPU 코드가 아예 없다
+ * (cores/variants/libraries 전부 확인). 자체 앱이 다시 설정할 수는 있지만
+ * 의무가 아니고, 현재 어느 앱도 하지 않는다. 즉 **여기 설정이 앱의 최종
+ * 메모리 속성이다.** 바꿀 때는 앱 쪽 영향을 먼저 따져야 한다. (12 문서)
  */
 bool bspDeInit(void)
 {
@@ -218,76 +238,61 @@ void SystemClock_Config(void)
 /*
  * 주변장치 클럭
  *
- *   QSPI : PLL2R = 200MHz. QUADSPI 프리스케일러 1 -> SCK 100MHz.
+ *   QSPI : **D1HCLK** (= 200MHz). QUADSPI 프리스케일러 1 -> SCK 100MHz.
  *   USB  : HSI48
  *   RTC  : LSE
  *
  *
- * QSPI 를 D1HCLK 이나 PLL1Q 가 아니라 **PLL2** 에서 뽑는 것이 핵심이다.
+ * QSPI 클럭 소스로 **PLL2 를 쓰면 안 된다.** 실기에서 물렸다.
  *
- *   부트로더가 memory-mapped 를 켜고 앱으로 점프하면, 앱은 QUADSPI 를 다시
- *   초기화하지 않는다. 못 한다 - 자기가 그 QSPI 에서 실행 중이기 때문이다.
- *   즉 **여기서 잡은 QSPI 설정이 그대로 앱의 XiP 설정이 된다.**
+ *   앱의 SystemInit() 은 시작하자마자 RCC 를 리셋한다.
  *
- *   그런데 앱은 자기 SystemClock_Config() 를 돌린다. QSPI 커널 클럭을 PLL1 이나
- *   D1HCLK 에 물려두면, 앱이 SYSCLK 을 바꾸는 순간 자기가 실행 중인 플래시의
- *   타이밍이 같이 흔들린다.
+ *     RCC->CR |= RCC_CR_HSION;      // HSI 켜고
+ *     RCC->CFGR = 0x00000000;       // SYSCLK -> HSI
+ *     RCC->CR &= 0xEAF6ED7FU;       // HSE/HSI48/PLL1/PLL2/PLL3 전부 OFF
  *
- *   실제 사례 : 아두이노 코어의 WeAct H750 variant 는 480MHz 로 올리면서
- *   QspiClockSelection = RCC_QSPICLKSOURCE_PLL (PLL1Q = 48MHz) 로 바꾼다.
- *   프리스케일러는 부트로더가 남긴 값 그대로라 SCK 가 50MHz -> 12MHz 로 떨어진다.
- *   앱이 죽지는 않지만 XiP 가 4배 느려진다.
+ *   마지막 줄이 **PLL2ON(bit26)을 끈다.** 앱은 QSPI 에서 XiP 로 실행 중이므로
+ *   자기 명령어 클럭을 스스로 끊는 셈이고, 그 자리에서 영원히 멈춘다.
+ *   실기 증상 : PC 가 SystemInit 의 RCC 쓰기 시퀀스(0x900055C0)에 고정.
  *
- *   PLL2 에서 뽑으면 앱이 PLL1 을 어떻게 만지든 QSPI 는 영향을 받지 않는다.
- *   (앱 쪽에서는 PeriphClockSelection 에서 RCC_PERIPHCLK_QSPI 를 빼야 한다)
+ *   D1HCLK 은 SYSCLK 을 따라가므로 CFGR=0 으로 HSI(64MHz)까지 **떨어질 뿐
+ *   끊기지 않는다.** SCK 은 32MHz 로 느려졌다가, 앱이 PLL1 을 다시 세우면
+ *   원래대로 돌아온다. 이게 XiP 에서 유일하게 안전한 선택이다.
+ *
+ *   D1CCIPR 의 QSPISEL 리셋값도 00 = D1HCLK 이라, 앱이 그 레지스터를 리셋해도
+ *   같은 소스가 유지된다.
+ *
+ * 참고: 앱이 SYSCLK 을 바꾸면 SCK 도 따라 바뀐다. HCLK 240MHz(480MHz SYSCLK)
+ * 까지 올려도 SCK 120MHz 로 W25Q64JV 규격(133MHz) 안이다.
  */
 void PeriphCommonClock_Config(void)
 {
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
 
-  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_QSPI
-                                           | RCC_PERIPHCLK_USB
-                                           | RCC_PERIPHCLK_RTC;
-
   /*
-   * PLL2 : 25MHz / M=5 = 5MHz -> N=80 -> VCO 400MHz -> R=2 -> 200MHz
+   * **`RCC_PERIPHCLK_QSPI` 를 넣으면 안 된다.**
    *
-   * 프리스케일러를 0(분주 없음)으로 두고 커널을 100MHz 로 하는 방법도 있지만,
-   * 그렇게 하면 SSHIFT(half-cycle 샘플 시프트)를 함께 쓰기 어렵다. 커널을 200MHz 로
-   * 올리고 프리스케일러 1 을 유지하는 쪽이 안전하다.
+   * 앱은 QSPI 에서 XiP 로 실행 중이다. QUADSPI 의 커널 클럭을 재설정하는 순간
+   * 자기 명령어 인출이 끊긴다. 부트로더가 커널을 `D1HCLK` 로 넘겨주므로 앱은
+   * 아무것도 안 해도 된다 — SYSCLK 를 바꿔도 `SCK = HCLK/2` 로 따라온다.
+   *
+   * **`RCC_PERIPHCLK_RTC` 도 넣으면 안 된다.**
+   *
+   * `HAL_RCCEx_PeriphCLKConfig()` 는 RTC 소스를 바꿀 때 **백업 도메인을 리셋**한다
+   * (`__HAL_RCC_BACKUPRESET_FORCE()`). 그러면 부트 모드 플래그와 폴트 카운터가
+   * 전부 날아간다. 부트로더가 이미 LSE 로 잡아 넘긴다 (12 문서).
+   *
+   * 그래서 앱이 여기서 설정하는 것은 USB 뿐이다.
    */
-  PeriphClkInitStruct.PLL2.PLL2M        = 5;
-  PeriphClkInitStruct.PLL2.PLL2N        = 80;
-  PeriphClkInitStruct.PLL2.PLL2P        = 2;
-  PeriphClkInitStruct.PLL2.PLL2Q        = 2;
-  PeriphClkInitStruct.PLL2.PLL2R        = 2;
-  PeriphClkInitStruct.PLL2.PLL2RGE      = RCC_PLL2VCIRANGE_2;   // 4 ~ 8 MHz
-  PeriphClkInitStruct.PLL2.PLL2VCOSEL   = RCC_PLL2VCOWIDE;      // 192 ~ 836 MHz
-  PeriphClkInitStruct.PLL2.PLL2FRACN    = 0;
+  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USB;
+  PeriphClkInitStruct.UsbClockSelection    = RCC_USBCLKSOURCE_HSI48;
 
-  PeriphClkInitStruct.QspiClockSelection = RCC_QSPICLKSOURCE_PLL2;
-  PeriphClkInitStruct.UsbClockSelection  = RCC_USBCLKSOURCE_HSI48;
-  PeriphClkInitStruct.RTCClockSelection  = RCC_RTCCLKSOURCE_LSE;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
   {
     Error_Handler();
   }
 }
 
-/*
- * MPU
- *
- *  TEX C B  의미
- *  ----------------------------------------------------------------
- *   0  0 0  Strongly Ordered
- *   0  0 1  Device (shared)
- *   0  1 0  Normal, Write-through, no write allocate
- *   0  1 1  Normal, Write-back, no write allocate
- *   1  0 0  Normal, Non-cacheable
- *   1  1 1  Normal, Write-back, write and read allocate
- *
- * BaseAddress 는 Size 에 정렬돼 있어야 한다. 안 그러면 조용히 엉뚱한 영역이 잡힌다.
- */
 void bspMpuInit(void)
 {
   MPU_Region_InitTypeDef MPU_InitStruct = {0};
@@ -326,13 +331,34 @@ void bspMpuInit(void)
   MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
-  //-- R2 : D2 SRAM. LCD 프레임버퍼와 SPI4 DMA 버퍼(.non_cache)가 여기 있다.
-  //   DMA 가 직접 읽는 메모리라 non-cacheable 로 잡아야 캐시 유지보수 없이 안전하다.
-  //   실제 SRAM1+2+3 은 288KB 지만 MPU 크기는 2의 거듭제곱이어야 해서 512KB 로 잡는다.
+  /*
+   * R2 + R3 : D2 SRAM. LCD 프레임버퍼와 SPI4 DMA 버퍼(.non_cache)가 여기 있다.
+   *   DMA 가 직접 읽는 메모리라 non-cacheable 로 잡아야 캐시 유지보수 없이 안전하다.
+   *
+   * **리전을 둘로 쪼갠다.** 실재하는 것은 288KB 뿐이다.
+   *
+   *   SRAM1  0x30000000  128KB
+   *   SRAM2  0x30020000  128KB   -> R2 가 256KB 로 한 번에 덮는다
+   *   SRAM3  0x30040000   32KB   -> R3
+   *                      ------
+   *   끝     0x30048000
+   *
+   * 예전에는 512KB 한 개로 잡았다. 그러면 **0x30048000~0x3007FFFF 라는 실재하지
+   * 않는 주소가 Normal 메모리로 보인다.** Cortex-M7 은 Normal 메모리를 투기적으로
+   * 접근하므로 아무도 그 주소를 쓰지 않아도 프리페치가 닿을 수 있고, AXI 가
+   * 에러를 돌려주면 정밀하지 않은(imprecise) BusFault 가 뜬다. 원인을 짚기
+   * 대단히 어려운 종류의 폴트다.
+   *
+   * 아래 R15 주석에 QSPI 에 대해 똑같은 논리를 적어두고 정작 여기에는 적용하지
+   * 않았다. 다른 세션이 지적해서 고쳤다.
+   *
+   * 서브리전(SRD)으로는 못 맞춘다. 512KB 리전의 서브리전은 64KB 단위인데
+   * 288KB 는 4.5칸이라 경계가 안 떨어진다.
+   */
   MPU_InitStruct.Number           = MPU_REGION_NUMBER2;
   MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
-  MPU_InitStruct.BaseAddress      = 0x30000000;
-  MPU_InitStruct.Size             = MPU_REGION_SIZE_512KB;
+  MPU_InitStruct.BaseAddress      = 0x30000000;                 // SRAM1 + SRAM2
+  MPU_InitStruct.Size             = MPU_REGION_SIZE_256KB;
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
   MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
   MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
@@ -340,6 +366,11 @@ void bspMpuInit(void)
   MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL1;             // Normal, Non-cacheable
   MPU_InitStruct.SubRegionDisable = 0x00;
   MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  MPU_InitStruct.Number           = MPU_REGION_NUMBER3;
+  MPU_InitStruct.BaseAddress      = 0x30040000;                 // SRAM3
+  MPU_InitStruct.Size             = MPU_REGION_SIZE_32KB;
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
   /*
@@ -353,14 +384,19 @@ void bspMpuInit(void)
    *    보인다. Cortex-M7 은 Normal 메모리를 **투기적으로(speculative) 프리페치**
    *    하므로, 없는 영역을 읽으려다 QUADSPI 를 엉뚱한 상태로 만든다.
    *
-   * 2) 부트로더에서는 **non-cacheable** 로 둔다 (TEX=1, C=0, B=0).
-   *    부트로더는 QSPI 에서 실행하지 않으므로 캐시가 필요 없고, 오히려 자기가
-   *    다시 굽는 메모리를 캐싱하면 stale 읽기가 끝없이 생긴다.
-   *    실기에서 이것 때문에 물렸다 - 소거/쓰기 직후 읽기가 옛 내용으로 나왔다.
+   * 2) **cacheable** 이어야 한다 (TEX=0, C=1, B=0 = write-through).
    *
-   *    앱은 자기 bspInit() 에서 cacheable 로 다시 잡아 XiP 성능을 얻는다.
-   *    점프 직후 앱이 MPU 를 다시 잡기 전까지는 non-cacheable 로 실행되는데,
-   *    느릴 뿐 동작에는 문제가 없다.
+   *    앱이 여기서 명령어를 인출하기 때문이다. non-cacheable 로 두면 명령어
+   *    하나하나를 SPI 트랜잭션으로 가져와야 해서 쓸 수 없을 만큼 느리다.
+   *    I-Cache 가 있어야 XiP 가 성립한다.
+   *
+   *    그리고 **앱이 이걸 고칠 수단이 없다.** 아두이노 코어에는 MPU 설정 코드가
+   *    아예 없어서(cores/ libraries/ variants/ 어디에도 HAL_MPU 호출이 없다)
+   *    부트로더가 넘겨준 설정 그대로 실행된다. 넘길 때 제대로 잡아줘야 한다.
+   *
+   *    부트로더 자신은 QSPI 를 memory-mapped 로 읽지 않으므로(07 문서 - 검증은
+   *    전부 indirect) 캐시를 켜도 stale 읽기 문제가 생기지 않는다.
+   *    점프 직전 bspDeInit() 이 캐시를 clean/invalidate 한다.
    */
   MPU_InitStruct.Number           = MPU_REGION_NUMBER15;
   MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
@@ -368,9 +404,9 @@ void bspMpuInit(void)
   MPU_InitStruct.Size             = MPU_REGION_SIZE_8MB;      // 실제 W25Q64 = 8MB
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
   MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
-  MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
-  MPU_InitStruct.IsShareable      = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL1;           // Normal, non-cacheable
+  MPU_InitStruct.IsCacheable      = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+  MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;           // Normal, write-through
   MPU_InitStruct.SubRegionDisable = 0x00;
   MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
   HAL_MPU_ConfigRegion(&MPU_InitStruct);

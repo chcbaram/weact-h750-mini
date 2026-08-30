@@ -2,11 +2,20 @@
 
 
 extern uint32_t _fw_flash_begin;
+extern uint32_t _fw_flash_size;
 
 
 /*
- * 부트로더 자신의 버전 정보. 링커스크립트의 VER 영역(0x08000400)에 놓인다.
- * 호스트 툴이 SWD 로 이 주소만 읽어도 어떤 부트로더가 올라가 있는지 알 수 있다.
+ * 앱의 버전 정보. 링커스크립트의 VER 영역(0x90001400)에 놓인다.
+ *
+ * **`firm_size` 가 이 구조체의 존재 이유다.** 태그(`firm_tag_t`)가 없는 이미지를
+ * 만나면 부트로더가 이걸 읽어 **2단계(VER)로 판정**하고, 크기를 알았으니 CRC 를
+ * 직접 계산해 태그 섹터에 써넣어 1단계(TAG)로 승격한다. SWD 로 굽든 어떻게 굽든
+ * 다음 부팅부터는 CRC 검증을 받게 된다 (07 문서).
+ *
+ * `firm_size` 를 `_fw_flash_end - _fw_flash_begin` 으로 쓰면 안 된다.
+ * 심볼 두 개의 차이는 단일 relocation 으로 인코딩되지 않아 **링커가 조용히 0 으로
+ * 접는다.** 경고도 없다. 링커스크립트가 만든 절대 심볼의 **주소**를 값으로 읽는다.
  */
 volatile const firm_ver_t firm_ver __attribute__((section(".version"))) =
 {
@@ -14,7 +23,7 @@ volatile const firm_ver_t firm_ver __attribute__((section(".version"))) =
   .version_str  = _DEF_FIRMWATRE_VERSION,
   .name_str     = _DEF_BOARD_NAME,
   .firm_addr    = (uint32_t)&_fw_flash_begin,
-  .firm_size    = 0,          // 부트로더는 자기 크기를 신고할 필요가 없다
+  .firm_size    = (uint32_t)&_fw_flash_size,
 };
 
 

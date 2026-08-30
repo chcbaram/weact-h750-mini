@@ -85,7 +85,12 @@ bool cmdBootProcess(cmd_t *p_cmd)
       info.firm_vec_addr = FLASH_ADDR_FIRM_VEC;
       info.firm_size     = FLASH_SIZE_FIRM;
       info.tag_size      = FLASH_SIZE_TAG;
+#if HW_DEV_MODE == HW_DEV_MODE_BOOT
       info.max_fw_size   = UF2_MAX_FW_SIZE;
+#else
+      //-- 앱은 UF2 모듈이 없다. 굽는 주체가 아니므로 0 으로 신고한다.
+      info.max_fw_size   = 0;
+#endif
       info.family_id     = BOARD_UF2_FAMILY_ID;
       snprintf(info.name,    sizeof(info.name),    "%s", _DEF_BOARD_NAME);
       snprintf(info.version, sizeof(info.version), "%s", _DEF_FIRMWATRE_VERSION);
@@ -101,7 +106,17 @@ bool cmdBootProcess(cmd_t *p_cmd)
       firm_tag_t     tag;
 
       memset(&ver, 0, sizeof(ver));
+      /*
+       * 부트로더는 CRC 까지 다시 계산해 판정한다. 앱은 그럴 수 없다 —
+       * 전수 읽기가 indirect 를 요구하고, 그 순간 자기 명령어 인출이 끊긴다.
+       * 앱이 돌고 있다는 것 자체가 이미 검증을 통과했다는 뜻이므로
+       * 태그/버전 매직만 보고 단계를 신고한다 (boot.c 의 앱 분기).
+       */
+#if HW_DEV_MODE == HW_DEV_MODE_BOOT
       ver.img_type = (uint8_t)bootVerifyFirm();
+#else
+      ver.img_type = (uint8_t)bootGetImgType();
+#endif
 
       if (bootGetTag(&tag))
       {
@@ -120,6 +135,27 @@ bool cmdBootProcess(cmd_t *p_cmd)
       break;
     }
 
+    /*
+     * 여기부터 FW_END 까지는 **부트로더 전용**이다.
+     *
+     * 앱에서 실행되면 flashErase()/flashWrite() 가 qspiSetXipMode(false) 를 불러
+     * memory-mapped 를 빠져나간다. 그 순간 자기 명령어 인출이 끊겨 **그 자리에서
+     * 죽는다.** 응답조차 못 보낸다 (04/12 문서).
+     *
+     * 호스트 툴은 INFO 의 mode 로 부트로더인지 앱인지 먼저 판별하고, 앱이면
+     * FW_UPDATE 를 보내 부트로더로 넘어가게 한 뒤 굽는다. 그래도 순서를 틀리는
+     * 툴이 있을 수 있으니 여기서 막는다.
+     */
+#if HW_DEV_MODE == HW_DEV_MODE_APP
+    case BOOT_CMD_FW_BEGIN:
+    case BOOT_CMD_FW_ERASE:
+    case BOOT_CMD_FW_WRITE:
+    case BOOT_CMD_FW_END:
+    case BOOT_CMD_FW_VERIFY:
+      err_code = ERR_BOOT_WRONG_CMD;
+      cmdSendResp(p_cmd, cmd, err_code, NULL, 0);
+      break;
+#else
     case BOOT_CMD_FW_BEGIN:
     {
       uint32_t fw_size = 0;
@@ -305,6 +341,7 @@ bool cmdBootProcess(cmd_t *p_cmd)
       cmdSendResp(p_cmd, cmd, err_code, &img, 1);
       break;
     }
+#endif  // HW_DEV_MODE_APP
 
     case BOOT_CMD_FW_UPDATE:
     case BOOT_CMD_FW_JUMP:

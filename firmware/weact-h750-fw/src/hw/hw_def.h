@@ -7,7 +7,7 @@
 
 
 #define _DEF_FIRMWATRE_VERSION    "V260830R4"
-#define _DEF_BOARD_NAME           "WEACT-H750-BOOT"
+#define _DEF_BOARD_NAME           "WEACT-H750-FW"
 
 
 //-- 하드웨어 핀맵 (WeAct STM32H7XX Board V1.2, 회로도 기준)
@@ -26,7 +26,7 @@
 
 #define _USE_HW_LED
 #define      HW_LED_MAX_CH          1
-#define      HW_LED_TOGGLE_MS       100   // 부트로더 = 100ms, 앱 = 500ms 로 구분
+#define      HW_LED_TOGGLE_MS       500   // 부트로더 = 100ms, 앱 = 500ms 로 구분
 
 #define _USE_HW_UART
 #define      HW_UART_MAX_CH         3
@@ -78,13 +78,30 @@
 #define      HW_RESET_CNT_MASK      0x000000FFUL
 #define      HW_RESET_DBLCLK_MS     300
 #define      HW_RESET_DBLCLK_CNT    2
+//-- 아래 둘은 **부트로더 설정**이다. 앱에서는 아무 효과가 없고, 값을 맞춰둘
+//   필요도 없다. 파일을 공유하므로 남겨만 둔다.
 #define      HW_BOOT_TRY_MAX        3
 #define      HW_BOOT_FAULT_MAX      3
+
+//-- 앱이 이 시간 동안 살아 있으면 resetConfirmBoot() 으로 확인 신호를 보낸다.
+//   부트로더의 HW_BOOT_TRY_MAX 를 켜려면 이 호출이 있어야 한다 (07 문서).
+#define      HW_BOOT_CONFIRM_MS     3000
 
 //-- 아래 블록들은 해당 단계에서 켠다. (드라이버가 아직 없다)
 //   2단계 QSPI / 3단계 SPI,LCD / 5단계 USB,CDC / 6단계 CMD
 
-#define _USE_HW_QSPI
+/*
+ * QSPI 드라이버는 **앱에 넣지 않는다** (`_USE_HW_QSPI` 를 정의하지 않는다).
+ *
+ * 앱은 QSPI 에서 XiP 로 실행 중이다. `qspiRead()` / `qspiErase()` / `qspiWrite()` 는
+ * 전부 `qspiSetXipMode(false)` 로 memory-mapped 를 빠져나온 뒤 동작하는데, 그
+ * 순간 자기 명령어 인출이 끊긴다. 즉 **부르는 즉시 죽는다** (04/12 문서).
+ *
+ * 앱이 QSPI 내용을 읽어야 하면 memory-mapped 주소를 그냥 역참조하면 된다.
+ * 쓰기/소거는 부트로더에 요청하는 길뿐이다 (`resetToBoot()`).
+ *
+ * 주소 상수는 아래 메모리 맵에서 쓰므로 남겨둔다.
+ */
 #define      HW_QSPI_ADDR           0x90000000
 #define      HW_QSPI_SIZE           (8*1024*1024)
 
@@ -100,7 +117,7 @@
 #define      HW_LCD_LOGO            0
 #define      HW_LCD_LVGL            0
 #define      HW_LCD_SWAP_RGB        0
-#define      HW_LCD_HANGUL          0     // 한글 글리프 약 32KB. 부트로더에는 불필요
+#define      HW_LCD_HANGUL          1     // 앱은 QSPI 8MB 라 한글 글리프 32KB 여유 있다
 
 #define _USE_HW_USB
 #define _USE_HW_CDC
@@ -143,9 +160,9 @@
 
 #define HW_DEV_MODE_BOOT            0
 #define HW_DEV_MODE_APP             1
-#define HW_DEV_MODE                 HW_DEV_MODE_BOOT
+#define HW_DEV_MODE                 HW_DEV_MODE_APP
 
-//-- 부트로더는 자기 자신(내부 플래시 전체)을 보호한다.
+//-- 앱은 부트로더(내부 플래시)를 보호한다. 앱이 내부 플래시를 지울 일은 없다.
 #define FLASH_PROTECT_ADDR          FLASH_ADDR_BOOT
 #define FLASH_PROTECT_SIZE          FLASH_SIZE_BOOT
 

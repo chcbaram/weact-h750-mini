@@ -5,6 +5,26 @@
 #include "hw_def.h"
 
 
+/*
+ * 폴트 원인 레지스터를 .noinit 에 남긴다.
+ *
+ * fault_log 의 PC/LR 만으로는 "왜" 를 알 수 없다. CFSR 의 비트와 MMFAR/BFAR 의
+ * 주소가 있어야 MPU 위반인지, 어느 주소를 건드렸는지가 갈린다.
+ */
+__attribute__((section(".noinit"))) volatile uint32_t fault_cfsr;
+__attribute__((section(".noinit"))) volatile uint32_t fault_hfsr;
+__attribute__((section(".noinit"))) volatile uint32_t fault_mmfar;
+__attribute__((section(".noinit"))) volatile uint32_t fault_bfar;
+
+static void faultCapture(void)
+{
+  fault_cfsr  = SCB->CFSR;
+  fault_hfsr  = SCB->HFSR;
+  fault_mmfar = SCB->MMFAR;
+  fault_bfar  = SCB->BFAR;
+}
+
+
 /******************************************************************************/
 /*           Cortex Processor Interruption and Exception Handlers             */
 /******************************************************************************/
@@ -27,6 +47,7 @@ void NMI_Handler(void)
   */
 void HardFault_Handler_C(uint32_t *p_stack)
 {
+  faultCapture();
   faultReset("HardFault", p_stack);
   while (1)
   {
@@ -38,6 +59,7 @@ void HardFault_Handler_C(uint32_t *p_stack)
   */
 void MemManage_Handler_C(uint32_t *p_stack)
 {
+  faultCapture();
   faultReset("MemManage", p_stack);
   while (1)
   {
@@ -49,6 +71,7 @@ void MemManage_Handler_C(uint32_t *p_stack)
   */
 void BusFault_Handler_C(uint32_t *p_stack)
 {
+  faultCapture();
   faultReset("BusFault", p_stack);
   while (1)
   {
@@ -60,6 +83,7 @@ void BusFault_Handler_C(uint32_t *p_stack)
   */
 void UsageFault_Handler_C(uint32_t *p_stack)
 {
+  faultCapture();
   faultReset("UsageFault", p_stack);
   while (1)
   {

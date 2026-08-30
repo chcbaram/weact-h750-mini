@@ -128,7 +128,7 @@ target_compile_options(${EXECUTABLE} PRIVATE
   )
 
 target_link_options(${EXECUTABLE} PRIVATE
-  -T../src/bsp/ldscript/STM32H750VBTx_BOOT.ld
+  -T../src/bsp/ldscript/STM32H750VBTx_QSPI.ld
 
   -mcpu=cortex-m7
   -mthumb
@@ -171,4 +171,18 @@ add_custom_command(TARGET ${EXECUTABLE}
   POST_BUILD
   COMMAND ${CMAKE_OBJCOPY} ARGS -O ihex ${EXECUTABLE} ${PROJECT_NAME}.hex
   COMMENT "Invoking: Make Hex"
+  )
+
+# .uf2 는 부트로더의 MSC 볼륨에 드래그앤드롭하는 형식이다.
+#
+#   --base 0x0  : **반드시 준다.** 안 주면 uf2conv.py 기본값 0x2000 이 적용되어
+#                 이미지 앞에 8KB 구멍이 생긴다. 부트로더의 uf2FlashWrite() 가
+#                 targetAddr 을 0 기준 오프셋으로 보고 FLASH_ADDR_FIRM_VEC 을
+#                 더하기 때문에, 여기서도 0 기준이어야 한다 (10 문서).
+#   --family    : 부트로더의 BOARD_UF2_FAMILY_ID 와 일치해야 한다.
+add_custom_command(TARGET ${EXECUTABLE}
+  POST_BUILD
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/uf2/uf2conv.py
+          ${PROJECT_NAME}.bin -c -b 0x0 -f 0xFFFF0004 -o ${PROJECT_NAME}.uf2
+  COMMENT "Invoking: Make UF2"
   )

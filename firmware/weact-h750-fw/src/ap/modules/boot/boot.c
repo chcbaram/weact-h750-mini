@@ -1,6 +1,53 @@
 #include "boot/boot.h"
 #include "cli.h"
 
+#if HW_DEV_MODE == HW_DEV_MODE_APP
+
+/*
+ * 앱 빌드에서는 이 파일이 **읽기 두 개로 줄어든다.**
+ *
+ * 앱은 QSPI 에서 XiP 로 실행 중이라 indirect 읽기를 쓸 수 없다.
+ * `qspiSetXipMode(false)` 를 부르는 순간 자기 명령어 인출이 끊긴다(04 문서).
+ * 대신 **memory-mapped 주소를 그냥 역참조**한다 — 읽기에는 그것으로 충분하고,
+ * 부트로더가 QUADSPI 를 memory-mapped 로 열어둔 채 넘겨주므로 항상 유효하다.
+ *
+ * 검증(`bootVerifyFirm`)과 점프(`bootJumpFirm`), 태그 승격(`bootPromoteTag`)은
+ * 앱에 존재할 이유가 없다. 앱이 할 수 있는 것은 `resetToBoot()` 으로 부트로더에
+ * 요청하는 것뿐이다.
+ */
+bool bootInit(void)
+{
+  return true;
+}
+
+bool bootGetTag(firm_tag_t *p_tag)
+{
+  memcpy(p_tag, (const void *)FLASH_ADDR_FIRM, sizeof(firm_tag_t));
+  return p_tag->magic_number == TAG_MAGIC_NUMBER;
+}
+
+bool bootGetVer(firm_ver_t *p_ver)
+{
+  memcpy(p_ver, (const void *)(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + FLASH_SIZE_VEC),
+         sizeof(firm_ver_t));
+  return p_ver->magic_number == VERSION_MAGIC_NUMBER;
+}
+
+BootImgType_t bootGetImgType(void)
+{
+  //-- 앱이 돌고 있다는 것 자체가 부트로더의 검증을 통과했다는 뜻이다.
+  firm_tag_t tag;
+  firm_ver_t ver;
+
+  if (bootGetTag(&tag) == true) return BOOT_IMG_TAG;
+  if (bootGetVer(&ver) == true) return BOOT_IMG_VER;
+  return BOOT_IMG_RAW;
+}
+
+#else   // HW_DEV_MODE_BOOT
+
+#include "ui/ui.h"
+
 
 static BootImgType_t img_type = BOOT_IMG_NONE;
 static firm_tag_t    firm_tag;
@@ -336,30 +383,113 @@ bool bootPromoteTag(void)
  */
 uint16_t bootJumpFirm(void)
 {
-  void (**jump_func)(void);
-  uint32_t reset_handler;
+  void (*app_entry)(void);
+  uint32_t reset_handler = 0;
 
   if (img_type == BOOT_IMG_NONE)
   {
     return ERR_BOOT_INVALID_FW;
   }
 
-  //-- 앱은 QSPI 에서 XiP 로 돈다. memory-mapped 를 켜둔 채로 넘겨야 한다.
+  /*
+   * 점프 주소는 **indirect 로 읽는다.**
+   *
+   * 여기서 오래 물렸다. 원래는 이렇게 되어 있었다.
+   *
+   *   jump_func = (void (**)(void))(FLASH_ADDR_FIRM_VEC + 4);
+   *   (*jump_func)();
+   *
+   * 이러면 호출하는 그 순간에 memory-mapped 로 다시 읽는다. 그런데 XiP 재진입
+   * 직후의 첫 읽기는 신뢰할 수 없어서(04/07 문서) **0xFFFFFFFF 가 돌아왔다.**
+   * BLX 0xFFFFFFFF -> PC = 0xFFFFFFFE -> 실행 불가 영역 -> IACCVIOL.
+   *
+   * 실기 증거 : CFSR = 0x00000001 (IACCVIOL), 폴트 PC = 0xFFFFFFFE,
+   *            LR = bootJumpFirm. 초당 9회 부팅 루프.
+   *
+   * 그래서 값을 indirect 로 미리 읽어 **레지스터에 담아두고** 그 값으로 분기한다.
+   * 포인터 역참조를 남겨두면 컴파일러가 호출 시점에 다시 읽는다.
+   */
+  qspiSetXipMode(false);
+  if (qspiRead(FLASH_SIZE_TAG + 4, (uint8_t *)&reset_handler, 4) != true)
+  {
+    return ERR_BOOT_FLASH_READ;
+  }
+
+  if (reset_handler < FLASH_ADDR_FIRM_VEC ||
+      reset_handler >= (FLASH_ADDR_FIRM + FLASH_SIZE_FIRM) ||
+      (reset_handler & 1) == 0)
+  {
+    logPrintf("[E_] bad reset handler 0x%X\n", (unsigned int)reset_handler);
+    return ERR_BOOT_INVALID_FW;
+  }
+
+  logPrintf("[  ] bootJumpFirm()\n");
+  logPrintf("     addr : 0x%X\n", (unsigned int)reset_handler);
+
+  app_entry = (void (*)(void))reset_handler;
+
+#ifdef BOOT_NO_JUMP
+  logPrintf("     [dbg] BOOT_NO_JUMP - 점프하지 않는다\n");
+  return ERR_BOOT_INVALID_FW;
+#endif
+
+  resetSetBootMode(0);
+
+  /*
+   * 앱으로 넘어간다는 것을 화면에 남긴다.
+   *
+   * bspDeInit() **앞이어야** 한다. 그 뒤에는 NVIC 가 전부 마스크되어 SPI DMA
+   * 완료 인터럽트가 오지 않고, 전송이 끝나지 않은 채로 점프하면 화면이 절반만
+   * 갱신된다. XiP 도 아직 꺼져 있어서 bootGetVer() 의 indirect 읽기가 성립한다.
+   *
+   * 이 화면은 앱이 자기 LCD 를 초기화할 때까지 그대로 남는다.
+   */
+#if defined(_USE_HW_LCD) && (HW_DEV_MODE == HW_DEV_MODE_BOOT)
+  uiShowJump(reset_handler);
+#endif
+
+  /*
+   * 순서가 중요하다. **캐시 정리를 먼저, XiP 진입을 나중에** 한다.
+   *
+   * 반대로 하면(XiP 켜고 나서 bspDeInit) 앱의 첫 명령어 인출이 쓰레기를 가져와
+   * UNDEFINSTR 로 죽었다. 점프 직전까지 memory-mapped 읽기는 멀쩡했으므로
+   * (indirect 와 바이트까지 일치 확인) 데이터 경로가 아니라 캐시 정리가
+   * QUADSPI 를 건드린 것이다.
+   *
+   * bspDeInit() 은 QSPI 가 indirect 인 동안 캐시를 비우고, 그 뒤에 XiP 를 켠다.
+   * XiP 진입 후에는 아무것도 만지지 않고 바로 분기한다.
+   */
+  bspDeInit();
+
   if (qspiSetXipMode(true) != true)
   {
     return ERR_BOOT_INVALID_FW;
   }
 
-  jump_func     = (void (**)(void))(FLASH_ADDR_FIRM_VEC + 4);
-  reset_handler = (uint32_t)(uintptr_t)(*jump_func);
-
-  logPrintf("[  ] bootJumpFirm()\n");
-  logPrintf("     addr : 0x%X\n", (unsigned int)reset_handler);
-
-  resetSetBootMode(0);
-  bspDeInit();
-
-  (*jump_func)();
+  /*
+   * MSP 를 설정하지 않고 분기한다. 앱 startup 의 첫 명령어가
+   *
+   *   Reset_Handler:  ldr sp, =_estack
+   *
+   * 이라 스택을 스스로 잡기 때문이다. 아두이노 코어의
+   * startup_stm32h750xx.s 도 그렇다(확인함).
+   *
+   * **RTOS 를 켜면(main.c 의 _USE_HW_RTOS 분기) 이게 버그가 된다.**
+   *   여기가 태스크 컨텍스트면 CONTROL.SPSEL=1 이고, 그 상태로 넘기면 앱의
+   *   `ldr sp, =_estack` 이 MSP 가 아니라 **PSP** 를 잡는다. 그러면 앱의 모든
+   *   예외 핸들러가 부트로더의 낡은 MSP 위에서 돌면서 앱 .bss 를 갉아먹는다.
+   *   증상이 "특정 변수 배치에서만 죽는다" 로 나와서 원인을 짚기 어렵다.
+   *
+   *   그때는 분기 직전에 이것이 필요하다 (지금은 불필요하고 미검증이라 넣지 않는다):
+   *
+   *     __set_CONTROL(0);
+   *     __ISB();
+   *     __set_MSP(vec0);        // 벡터 word[0] = 앱의 초기 MSP
+   *
+   *   vec0 은 bootIsValidVector() 가 이미 RAM 범위로 검증하는 값이다.
+   *   다른 세션(hancheol-5a)이 지적했다. 12 문서 참고.
+   */
+  app_entry();
 
   return OK;    // 여기 오면 안 된다
 }
@@ -420,3 +550,5 @@ void cliBoot(cli_args_t *args)
   }
 }
 #endif
+
+#endif  // HW_DEV_MODE_APP

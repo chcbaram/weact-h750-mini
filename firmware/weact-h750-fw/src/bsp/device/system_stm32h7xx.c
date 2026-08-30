@@ -177,11 +177,29 @@
   * @param  None
   * @retval None
   */
+extern uint32_t _fw_flash_begin;
+
 void SystemInit (void)
 {
 #if defined (DATA_IN_D2_SRAM)
  __IO uint32_t tmpreg;
 #endif /* DATA_IN_D2_SRAM */
+
+  /*
+   * 벡터 테이블을 QSPI 로 옮긴다.
+   *
+   * 부트로더는 VTOR 을 건드리지 않고 앱의 Reset_Handler 로 바로 분기한다.
+   * 그래서 이 줄이 실행되기 전까지는 **부트로더의 벡터 테이블(0x08000000)이
+   * 살아 있다.** 그 구간에서 인터럽트가 뜨면 부트로더 핸들러로 뛴다.
+   * (부트로더가 bspDeInit() 에서 NVIC 를 전부 마스크하고 넘기는 이유다.)
+   *
+   * 대입이지 OR 가 아니다. 아두이노 코어의 system_stm32h7xx.c 는
+   * `SCB->VTOR = VECT_TAB_BASE_ADDRESS | VECT_TAB_OFFSET` 이라 기본값
+   * 0x08000000 과 OR 되어 0x98000000 이 되는 함정이 있다 (12/15 문서).
+   *
+   * _fw_flash_begin = 0x90001000. 4KB 정렬이라 VTOR 정렬 요구를 넉넉히 만족한다.
+   */
+  SCB->VTOR = (uint32_t)&_fw_flash_begin;
 
   /* FPU settings ------------------------------------------------------------*/
   #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)

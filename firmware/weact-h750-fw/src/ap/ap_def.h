@@ -5,9 +5,7 @@
 #include "module.h"
 #include "cli/cli_mgr.h"
 #include "boot/boot.h"
-#include "uf2/uf2.h"
 #ifdef _USE_HW_LCD
-#include "ui/ui.h"
 #endif
 #ifdef _USE_HW_CMD
 #include "cmd/cmd_task.h"
