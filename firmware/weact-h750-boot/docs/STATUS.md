@@ -229,7 +229,38 @@ openocd -f tools/openocd/weact-h750.cfg \
 ### 폴트 진단 (`.noinit`, 주소는 빌드마다 변함 — `arm-none-eabi-nm` 으로 확인)
 
 `fault_bfar`, `fault_mmfar`, `fault_hfsr`, `fault_cfsr`, `fault_log`.
-CFSR 해석: bit0 IACCVIOL(명령어 접근 위반), bit1 DACCVIOL, bit16 UNDEFINSTR.
+
+SCB 레지스터를 SWD 로 직접 읽을 때의 순서 (**`0xE000ED30` 은 MMFAR 가 아니라 DFSR
+이다** — 한 번 헷갈렸다):
+
+| 주소 | 레지스터 |
+|---|---|
+| `0xE000ED28` | **CFSR** — bit0 IACCVIOL, bit1 DACCVIOL, bit7 MMARVALID, bit16 UNDEFINSTR |
+| `0xE000ED2C` | **HFSR** — bit30 FORCED(에스컬레이션), bit1 VECTTBL |
+| `0xE000ED30` | DFSR — 디버그용. halt 하면 값이 선다 |
+| `0xE000ED34` | **MMFAR** — CFSR bit7 이 서 있을 때만 유효. IACCVIOL 은 채우지 않는다 |
+| `0xE000ED24` | SHCSR — bit0 MEMFAULTACT, bit16 MEMFAULTENA |
+
+### 예외 스택 프레임은 32바이트가 아니라 **104바이트** 다
+
+이 타깃은 FPU 가 켜져 있고 lazy stacking 이 동작하므로 `EXC_RETURN` 이
+**`0xFFFFFFE9`**(Thread/MSP/**FP 확장 프레임**)로 나온다. 기본 프레임 32바이트가
+아니라 **104바이트**다. 스택 깊이를 계산할 때 이걸 빼야 폴트 직전 SP 가 나온다.
+
+프레임 배치는 앞 32바이트가 동일하다.
+
+```
+MSP+0x00 R0   +0x04 R1   +0x08 R2   +0x0C R3
+MSP+0x10 R12  +0x14 LR   +0x18 PC   +0x1C xPSR      <- 이후 S0-S15, FPSCR
+```
+
+`+0x14`/`+0x18` 은 **하드웨어가 푸시한 값이라 신뢰할 수 있다.** 반면 스택을 훑어
+리턴 주소를 추정해 재구성한 콜체인은 죽은 프레임의 잔해를 집기 쉽다 — 이것 때문에
+아두이노 세션이 폴트 위치를 `loop()` 으로 잘못 짚고 한참 돌아갔다.
+
+`Default_Handler` 는 `b .` 라 레지스터를 건드리지 않는다. 그래서 폴트로 거기 갇혀
+있으면 **R4~R11 도 폴트 당시 값 그대로 남아 있다.** 스택에 안 쌓이는 레지스터를
+얻는 유일한 방법이다.
 
 ## 실기에서 잡은 함정 (전부 문서에 상세 기록)
 
