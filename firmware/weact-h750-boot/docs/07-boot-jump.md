@@ -302,3 +302,82 @@ LCD 도 `FAULT LOOP` 를 빨간색으로 띄운다.
 
 세 번째 경로는 시험을 준비하던 중 **아두이노 세션이 실제로 업로드를 보내면서
 우연히 확인됐다.** 의도한 복구 경로가 실사용에서 그대로 동작한 셈이다.
+
+## 점프 직전 처리 — ST 레퍼런스에 맞췄다 (V260830R8)
+
+사용자가 "제조사 라이브러리에 H750 부트로더 예제가 있을 것" 이라고 짚어서 찾았다.
+**`STM32H750B-DK/Templates/ExtMem_Boot`** 가 우리와 정확히 같은 용도다 — 내부
+플래시 128KB 부트로더가 외부 QSPI 앱으로 점프하는 ST 공식 템플릿.
+
+```c
+/* ST ExtMem_Boot/Src/main.c */
+CPU_CACHE_Enable();                              // 맨 처음 켠다 (우리와 같음)
+HAL_Init();
+SystemClock_Config();
+Memory_Startup();                                // QSPI memory-mapped 진입
+MPU_Config();
+
+CPU_CACHE_Disable();                             // <- flush 가 아니라 **끈다**
+SysTick->CTRL = 0;
+JumpToApplication = (pFunction)(*(uint32_t*)(APPLICATION_ADDRESS + 4));
+__set_MSP(*(uint32_t*) APPLICATION_ADDRESS);     // <- **MSP 를 설정한다**
+JumpToApplication();
+```
+
+두 가지를 가져왔다.
+
+### 1. 캐시를 비우지 말고 끈다
+
+```c
+SCB_DisableDCache();      // CMSIS 가 내부적으로 clean-invalidate 후 끈다
+SCB_InvalidateICache();
+SCB_DisableICache();
+```
+
+`SCB_DisableDCache()` 는 예전 코드(`SCB_CleanInvalidateDCache()`)의 **상위집합**
+이라 안전이 줄지 않는다. **끄는 것이 나은 진짜 이유는 앱 쪽에 있다.**
+
+CMSIS `SCB_EnableDCache()` 에는 가드가 있다.
+
+```c
+if (SCB->CCR & SCB_CCR_DC_Msk) return;   /* 이미 켜져 있으면 no-op */
+```
+
+**켠 채로 넘기면 앱의 `SCB_EnableDCache()` 가 아무것도 안 한다.** 앱은 자기가
+캐시를 켰다고 생각하지만 전체 invalidate 를 한 번도 못 하고, 부트로더가 남긴
+캐시 상태를 그대로 물려받는다. 아두이노 코어도 `premain()` 에서 이 함수를
+부르므로 똑같이 해당된다(그쪽 세션이 `cores/arduino/main.cpp:25` 로 확인).
+
+### 2. `__set_MSP()` 로 앱의 초기 MSP 를 넣는다
+
+벡터 word[0] 을 indirect 로 읽어 분기 직전에 넣는다. 앱 `Reset_Handler` 의
+`ldr sp, =_estack` 이 어차피 덮어쓰므로 베어메탈에서는 없어도 동작하지만,
+**`ldr sp` 가 실행되기 전 구간을 없앤다.** 그 구간에서 예외가 뜨면 부트로더의
+낡은 MSP 위에 프레임이 쌓인다. RTOS 를 켜서 `CONTROL.SPSEL=1` 인 경우에도
+MSP 가 올바르게 남는다(위 조건부 항목 참고).
+
+`bootIsValidVector()` 가 검증한 값이지만 여기서 한 번 더 RAM 범위를 확인하고,
+이상하면 설정하지 않고 앱에 맡긴다. **반드시 분기 직전이어야 한다** — SP 를
+바꾼 뒤 지역변수를 건드리면 깨진다.
+
+### 실측 — 간헐 폴트가 사라졌다
+
+사용자가 "리셋을 반복하면 가끔 앱이 안 뜬다" 고 보고한 건이다. 아두이노 세션의
+`LcdHangul` 스케치 두 판본으로 재현했다. 판정은 **폴트 레지스터 + `uwTick` 증가**
+(PC 샘플링은 위양성 10% 라 버렸다).
+
+| 부트로더 | 앱 | 결과 |
+|---|---|---|
+| SPI4/DMA1 리셋만 | 수정 전 | 정상 37 / **폴트 3** (7.5%) |
+| SPI4/DMA1 리셋만 | 수정 후(`93a99a7`) | 정상 40 / 폴트 0 |
+| **+ ST 방식(캐시 Disable, set_MSP)** | **수정 전** | **정상 80 / 폴트 0** |
+
+**앱을 안 고쳐도 0/80 이다.** 귀무가설(7.5%) 하에서 0/80 이 나올 확률은 0.196% 다.
+
+> **주의: 두 변경을 한 번에 넣어서 어느 쪽이 실효인지 분리하지 못했다.**
+> 둘 다 ST 레퍼런스 근거가 독립적으로 있어 그대로 두지만, 기여도는 미확인이다.
+
+폴트 서명은 `CFSR 0x400`(IMPRECISERR)과 `CFSR 0x001`(IACCVIOL) 두 가지였다.
+후자는 **MPU 가 AXI SRAM 을 XN 으로 잡고 있어서** RAM 함수 포인터로 `bx` 하면
+나는 것이다. 둘 다 같은 문 — 앱이 준비되기 전에 들어오는 스퓨리어스 SPI4
+인터럽트 — 에서 나온다.

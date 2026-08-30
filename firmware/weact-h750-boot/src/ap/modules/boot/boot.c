@@ -408,6 +408,7 @@ uint16_t bootJumpFirm(void)
 {
   void (*app_entry)(void);
   uint32_t reset_handler = 0;
+  uint32_t initial_msp   = 0;
 
   if (img_type == BOOT_IMG_NONE)
   {
@@ -434,6 +435,11 @@ uint16_t bootJumpFirm(void)
    */
   qspiSetXipMode(false);
   if (qspiRead(FLASH_SIZE_TAG + 4, (uint8_t *)&reset_handler, 4) != true)
+  {
+    return ERR_BOOT_FLASH_READ;
+  }
+  //-- 벡터 word[0] = 앱의 초기 MSP. 아래에서 __set_MSP() 에 쓴다.
+  if (qspiRead(FLASH_SIZE_TAG, (uint8_t *)&initial_msp, 4) != true)
   {
     return ERR_BOOT_FLASH_READ;
   }
@@ -511,7 +517,27 @@ uint16_t bootJumpFirm(void)
    *
    *   vec0 은 bootIsValidVector() 가 이미 RAM 범위로 검증하는 값이다.
    *   다른 세션(hancheol-5a)이 지적했다. 12 문서 참고.
+   *
+   * **MSP 는 설정한다.** ST 의 H750 레퍼런스(`ExtMem_Boot`)가 그렇게 한다.
+   *
+   *   __set_MSP(*(uint32_t*)APPLICATION_ADDRESS);
+   *   JumpToApplication();
+   *
+   * 앱 `Reset_Handler` 의 `ldr sp, =_estack` 이 어차피 덮어쓰므로 베어메탈에서는
+   * 없어도 동작한다. 그래도 넣는 이유는 **`ldr sp` 가 실행되기 전 구간을 없애기
+   * 위해서**다. 그 구간에서 예외가 뜨면 부트로더의 낡은 MSP 위에 스택 프레임이
+   * 쌓인다. 그리고 RTOS 를 켜면 `CONTROL.SPSEL=1` 때문에 앱의 `ldr sp` 가 PSP 를
+   * 잡아버리는데(위 참고), MSP 를 미리 넣어두면 그 경우에도 MSP 가 올바르다.
+   *
+   * `initial_msp` 는 `bootIsValidVector()` 가 이미 RAM 범위로 검증한 값이다.
+   * 여기서 한 번 더 확인하고, 이상하면 설정하지 않고 앱에 맡긴다.
+   *
+   * **반드시 분기 직전이어야 한다.** SP 를 바꾼 뒤 지역변수를 건드리면 깨진다.
    */
+  if (initial_msp >= 0x20000000 && initial_msp <= 0x38010000)
+  {
+    __set_MSP(initial_msp);
+  }
   app_entry();
 
   return OK;    // 여기 오면 안 된다

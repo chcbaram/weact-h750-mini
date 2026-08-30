@@ -126,9 +126,34 @@ bool bspDeInit(void)
   SysTick->LOAD = 0;
   SysTick->VAL  = 0;
 
-  //-- QSPI 를 새로 구웠다면 캐시에 옛 내용이 남아 있다. 반드시 비우고 넘긴다.
-  SCB_CleanInvalidateDCache();
+  /*
+   * 캐시를 **비우는 것이 아니라 끈다.**
+   *
+   * ST 의 H750 레퍼런스(`STM32H750B-DK/Templates/ExtMem_Boot`)가 이렇게 한다.
+   * 우리와 정확히 같은 용도 — 내부 플래시 128KB 부트로더가 외부 QSPI 앱으로
+   * 점프하는 템플릿이다.
+   *
+   *   CPU_CACHE_Disable();   // SCB_DisableDCache() + SCB_DisableICache()
+   *   SysTick->CTRL = 0;
+   *   __set_MSP(*(uint32_t*)APPLICATION_ADDRESS);
+   *   JumpToApplication();
+   *
+   * CMSIS 의 `SCB_DisableDCache()` 는 내부적으로 clean-invalidate 를 한 뒤 끄므로
+   * 예전 코드(`SCB_CleanInvalidateDCache()`)의 **상위집합**이다. 안전이 줄지 않는다.
+   *
+   * 끄는 것이 나은 진짜 이유는 **앱 쪽에 있다.**
+   *
+   *   CMSIS `SCB_EnableDCache()` 에는 `if (SCB->CCR & SCB_CCR_DC_Msk) return;`
+   *   가드가 있다. 캐시를 켠 채 넘기면 앱의 `SCB_EnableDCache()` 가 **no-op** 이
+   *   되어, 앱은 자기가 캐시를 켰다고 생각하지만 실제로는 전체 invalidate 를
+   *   한 번도 못 한다. 부트로더가 남긴 캐시 상태를 그대로 물려받는다.
+   *
+   * 꺼서 넘기면 앱의 enable 이 실제로 돌면서 깨끗하게 시작한다.
+   * 아두이노 코어도 `premain()` 에서 `SCB_EnableDCache()` 를 부르므로 같다.
+   */
+  SCB_DisableDCache();
   SCB_InvalidateICache();
+  SCB_DisableICache();
 
   return true;
 }
