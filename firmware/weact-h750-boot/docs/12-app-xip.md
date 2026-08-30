@@ -25,8 +25,34 @@ QSPI 에서 XiP 로 실행되는 애플리케이션이 지켜야 할 것과, 부
 | D2SRAM1/2/3 | 클럭 **ON** |
 | GPIO 클럭 | A, B, C, D, E, H **ON** |
 | 캐시 | I-Cache, D-Cache **ON** |
-| MPU | 활성. **R15 = QSPI 0x90000000 8MB, write-through cacheable, 실행 허용** |
+| MPU | 활성 (`MPU_CTRL = 0x5`, ENABLE + PRIVDEFENA). 리전 표는 03 문서 |
+| MSP | **설정하지 않는다.** 앱 `Reset_Handler` 의 `ldr sp, =_estack` 이 잡는다 |
+| VTOR | **건드리지 않는다.** 앱 `SystemInit()` 이 옮긴다 |
+| CONTROL | 0. 앱은 처음부터 끝까지 **MSP** 로 돈다 (PSP 미사용) |
 | NVIC | 점프 직전 전부 disable + clear, SysTick 정지, 캐시 clean/invalidate |
+
+### 메모리 속성 실측 (2026-08-30, 앱 실행 중 SWD 덤프)
+
+```
+MPU_TYPE 0x00001000   DREGION=16
+MPU_CTRL 0x00000005   ENABLE=1, PRIVDEFENA=1
+R0  RBAR 0x00000000   RASR 0x1004873f
+R1  RBAR 0x24000001   RASR 0x13020025   AXI SRAM 512KB
+R2  RBAR 0x30000002   RASR 0x130c0025   D2 SRAM (구 512KB 판)
+CCR      0x00070200   DC=1 IC=1 BP=1 STKALIGN=1
+```
+
+**R1(AXI SRAM) = `TEX=000, C=1, B=0` → Normal, write-through, no write allocate.**
+
+이것이 앱 쪽 캐시 코드에 직접 영향을 준다. **write-through 영역에는 dirty 라인이
+존재할 수 없다.** 모든 스토어가 즉시 메모리까지 나가므로
+
+- `SCB_CleanDCache_by_Addr()` 는 사실상 no-op 이다
+- `SCB_InvalidateDCache_by_Addr()` 는 clean 라인만 버리므로 **이웃 데이터를 잃지
+  않는다.** 범위를 캐시 라인 경계로 넓혀도 데이터가 파괴되지 않는다
+
+DMA 버퍼를 굳이 AXI 에 둘 이유가 없다면 **RAM_D2(`0x30000000`)** 로 옮기는 쪽이
+낫다. 거기는 Normal **non-cacheable** 이라 캐시 유지보수가 아예 필요 없다.
 
 ## 앱이 절대 하면 안 되는 것
 
@@ -130,6 +156,32 @@ CRC 범위는 `_fw_flash_begin` 부터 `firm_size` 바이트다. 즉 벡터 + `.
 
 아두이노 코어에는 **MPU 코드가 아예 없다** (`cores/`, `libraries/`, `variants/`
 어디에도 `HAL_MPU` 호출이 없다). 그래서 부트로더가 제대로 넘겨주는 것이 중요하다.
+**부트로더의 리전 표가 곧 앱의 최종 메모리 속성이다.**
+
+주의 하나: **AXI SRAM(R1)은 XN 이다.** ldscript 가 `*(.RamFunc)` 를 `.data` 에 넣고
+`.data` 가 `RAM_D1` 로 가면, `__RAM_FUNC` 코드가 생기는 순간 MemManage 로 죽는다.
+MPU 를 풀지 말고 **ITCM 으로 보내면 된다** — R0 의 `SubRegionDisable = 0x87` 이
+서브리전 0(`0x00000000~0x1FFFFFFF`)을 비활성화하므로 ITCM 은 기본 메모리맵
+(Normal, 실행 가능)을 따른다. 0-wait 라 성능도 낫다.
+
+### 앱의 `SCB_EnableDCache()` 에 가드가 있는지 확인할 것
+
+부트로더가 **I-Cache/D-Cache 를 켠 채로** 넘긴다. 앱이 다시 켜는 것 자체는 흔하다
+(아두이노 코어는 `main.cpp` 의 `premain()` 에서 부른다).
+
+문제는 CMSIS 버전이다. 최신 구현에는 가드가 있다.
+
+```c
+if (SCB->CCR & SCB_CCR_DC_Msk) return;   /* 이미 켜져 있으면 no-op */
+```
+
+**가드가 없는 옛 CMSIS 는 `SCB_InvalidateDCache()`(clean 이 아니라 set/way 전체
+무효화)를 먼저 한다.** 그러면 `premain()` 직전까지 startup 이 수행한 `.data` 복사와
+`.bss` 클리어가 dirty 상태로 캐시에 있다가 통째로 버려진다.
+
+지금 조합에서는 문제가 없다 — R1 이 write-through 라 애초에 dirty 가 없고, 아두이노가
+쓰는 CMSIS 6.2.0(`armv7m_cachel1.h:145`)에도 가드가 있다(다른 세션이 확인).
+**다만 코어/툴체인 버전을 옮기면 다시 살아날 수 있는 함정이다.**
 
 ## 실기 검증 결과 (아두이노 Blink)
 
