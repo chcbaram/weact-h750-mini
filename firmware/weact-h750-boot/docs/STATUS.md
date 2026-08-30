@@ -36,8 +36,8 @@ LED(PE3) 점멸 육안 확인.  폴트 카운터 0 유지.
 ## 현재 빌드
 
 ```
-버전  : V260830R6
-FLASH : 98,216 B  76.12% / 126 KB
+버전  : V260830R7
+FLASH : 98,184 B  76.10% / 126 KB
 RAM   : 37,952 B   7.24% / 512 KB (AXI)
 D2RAM : 28,832 B   9.78% / 288 KB (LCD 프레임버퍼 25,600 B)
 산출물: .elf / .bin / .hex / .map
@@ -220,8 +220,13 @@ openocd -f tools/openocd/weact-h750.cfg \
 ```bash
 cd firmware/weact-h750-boot
 openocd -f tools/openocd/weact-h750.cfg \
-  -c "init" -c "halt" -c "mww 0x5800405C 0x00000003" -c "reset run" -c "shutdown"
+  -c "init" -c "halt" -c "mww 0x5800405C 0x00000003" -c "reset halt" -c "resume" -c "shutdown"
 ```
+
+> **`mww` 바로 뒤에 `reset run` 을 쓰지 말 것.** RTC 백업 레지스터 쓰기는 APB 에서
+> RTC 클럭 도메인으로 넘어가는 데 시간이 걸리는데, 그전에 리셋이 걸리면 **쓰기가
+> 씻겨나간다.** 실측으로 `reset run` 은 여러 번 실패했고 `reset halt` + `resume`
+> 은 매번 성공했다. 확실히 하려면 쓰고 나서 `mdw` 로 읽어 확인한다.
 
 VSCode 태스크 **`Device - 부트 모드로 강제 진입`** 이 같은 일을 한다.
 
@@ -336,6 +341,19 @@ MSP+0x10 R12  +0x14 LR   +0x18 PC   +0x1C xPSR      <- 이후 S0-S15, FPSCR
 3. **검증표에는 "무엇을 봤는지" 를 적는다.** "동작함" 은 나중에 아무 의미가 없다
 4. **"이 경로로 직접 확인했는가" 를 항목마다 적는다.**
    **옆 경로가 되는 것은 이 경로의 증거가 아니다**
+5. **실패를 말하지 않는 갱신은 갱신이 아니다.** 치환·갱신 스크립트는
+   **바꾼 개수를 확인하고, 못 찾으면 멈춘다**
+
+5번 사례 (오늘)
+- BSD `sed` 가 `\s` 를 지원하지 않아 startup 의 weak alias 치환이 **아무것도
+  안 바꾸고 조용히 성공**했다. 한참 뒤 링크 에러로 드러났다
+- 아두이노 세션의 번들 README 가 **세 판본 뒤처져** 있었다. 문자열 치환이
+  행을 못 찾고 조용히 넘어갔다
+
+```python
+s2 = re.sub(pat, repl, s, count=1)
+assert s2 != s, "치환 실패"
+```
 
 4번이 오늘 가장 많이 나온 실패다. 다섯 건 중 셋이 이 모양이었다.
 

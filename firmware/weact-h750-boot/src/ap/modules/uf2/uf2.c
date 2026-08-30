@@ -19,7 +19,6 @@ static uint8_t  erase_map[(UF2_ERASE_BLOCK_MAX + 7) / 8];   // 플래시 절대 
 
 
 static void uf2TransferReset(WriteState *state);
-static bool uf2FlashIsBlank(uint32_t addr, uint32_t size);
 static bool uf2FlashEraseOnce(uint32_t offset, uint32_t len);
 static bool uf2FlashWrite(uint32_t target_addr, void const *data, uint32_t len);
 static bool uf2FlashFlush(void);
@@ -67,25 +66,6 @@ void uf2TransferReset(WriteState *state)
   percent   = 0;
 }
 
-static bool uf2FlashIsBlank(uint32_t addr, uint32_t size)
-{
-  uint8_t buf[256];
-
-  for (uint32_t i=0; i<size; i+=sizeof(buf))
-  {
-    uint32_t len = size - i;
-
-    if (len > sizeof(buf)) len = sizeof(buf);
-    if (flashRead(addr + i, buf, len) != true) return false;
-
-    for (uint32_t j=0; j<len; j++)
-    {
-      if (buf[j] != 0xFF) return false;
-    }
-  }
-  return true;
-}
-
 /*
  * 지우기를 전송당 한 번만 한다. **64KB 블록 단위**다.
  *
@@ -128,13 +108,18 @@ bool uf2FlashEraseOnce(uint32_t offset, uint32_t len)
     if (erase_map[pos] & mask) continue;
 
     /*
-     * 이미 비어 있으면 건너뛴다. 64KB 지우기는 150ms 이상이고 blank 검사는
-     * 몇 ms 다. 새 칩이나 전체 소거 직후에 크게 이득이다. (convex 에서 가져왔다)
+     * **지우기 전 blank 검사는 넣지 않는다.**
+     *
+     * convex 는 넣는다(`uf2_flash_is_blank`). 거기는 QSPI 가 스테이징 버퍼라
+     * 전체 소거 직후처럼 **실제로 비어 있는 경우**가 있다.
+     *
+     * 우리는 아니다. 이 경로는 항상 직전 이미지를 덮어쓰므로 비어 있는 일이
+     * 없다. 즉 절약은 0 이고, 매 업로드마다 64KB 를 전부 읽는 비용만 남는다.
+     * 아두이노 세션도 같은 이미지를 두 번 써서 시간 차이가 없음을 확인했다.
+     *
+     * 새 칩이나 `qspi erase` 직후에만 이득인데 평생 몇 번 안 겪는다.
      */
-    if (uf2FlashIsBlank(FLASH_ADDR_FIRM + i * blk, blk) != true)
-    {
-      if (flashErase(FLASH_ADDR_FIRM + i * blk, blk) != true) return false;
-    }
+    if (flashErase(FLASH_ADDR_FIRM + i * blk, blk) != true) return false;
     erase_map[pos] |= mask;
   }
   return true;

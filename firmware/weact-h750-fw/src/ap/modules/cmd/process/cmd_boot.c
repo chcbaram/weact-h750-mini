@@ -205,9 +205,37 @@ bool cmdBootProcess(cmd_t *p_cmd)
       {
         err_code = ERR_BOOT_WRONG_CMD;
       }
-      else if (flashErase(FLASH_ADDR_FIRM_VEC, (uint32_t)wr_length) != true)
+      else
       {
-        err_code = ERR_BOOT_FLASH_ERASE;
+        /*
+         * **64KB 정렬 범위로 넓혀서 요청한다.** 그래야 qspiErase() 가 전부
+         * 64KB 블록으로 지운다. 실측으로 업로드의 대부분이 지우기였다.
+         *
+         *   242KB 이미지 : 총 4.92s = 전송 0.9s + **지우기 4.02s**
+         *
+         * 0x90001000 부터 요청하면 시작이 64KB 정렬이 아니라 앞 15섹터가
+         * 4KB 로 떨어져 이득이 절반으로 준다. 그래서 **태그 섹터를 포함해
+         * `FLASH_ADDR_FIRM`(0x90000000, 64KB 정렬)부터** 요청한다.
+         *
+         * 두 가지가 안전을 보장한다.
+         *   - 태그는 바로 위 FW_BEGIN 이 이미 지웠다. 다시 지워도 무해하고
+         *     어차피 FW_END 에서 새로 쓴다
+         *   - 꼬리를 64KB 로 올리는 것은 앱 영역의 빈 공간을 더 지우는 것뿐이다.
+         *     어차피 이 전송이 덮어쓸 자리다
+         *
+         * qspiErase() 자체는 요청 범위를 넘지 않는다. 넓히는 판단은 **여기서**
+         * 한다 — 태그 하나만 지우는 FW_BEGIN 이 앱을 날리면 안 되기 때문이다.
+         */
+        const uint32_t blk = 0x10000;
+        uint32_t len = FLASH_SIZE_TAG + (uint32_t)wr_length;
+
+        len = (len + blk - 1) & ~(blk - 1);
+        if (len > FLASH_SIZE_FIRM) len = FLASH_SIZE_FIRM;
+
+        if (flashErase(FLASH_ADDR_FIRM, len) != true)
+        {
+          err_code = ERR_BOOT_FLASH_ERASE;
+        }
       }
       cmdSendResp(p_cmd, cmd, err_code, NULL, 0);
       break;
@@ -284,6 +312,7 @@ bool cmdBootProcess(cmd_t *p_cmd)
       firm_tag_t tag;
       uint16_t   crc = 0;
       uint8_t    buf[256];
+      uint32_t   fw_size;
 
       if (wr_length <= 0 || wr_index == 0)
       {
@@ -291,9 +320,35 @@ bool cmdBootProcess(cmd_t *p_cmd)
       }
       else
       {
-        for (uint32_t i=0; i<wr_index && err_code == OK; i+=sizeof(buf))
+        /*
+         * 태그 크기는 **`.version` 의 `firm_size` 를 우선한다.**
+         *
+         * `wr_index` 는 호스트가 실제로 보낸 최대 끝 오프셋이다. 호스트가
+         * 패딩을 붙이면(정렬 목적 등) 그 길이가 그대로 들어가서 `.version` 과
+         * 어긋나고, 다음 부팅에 **stale tag** 로 판정되어 VER 로 강등된다.
+         * CRC 도 패딩을 포함해 UF2/SWD 경로와 값이 달라진다.
+         *
+         * 실제로 겪었다 — `download.py` 가 16바이트 정렬 패딩을 붙여서
+         * `FW_VERIFY` 가 TAG 대신 VER 을 돌려줬다. UF2 경로에서도 같은 실수를
+         * 했었다(10 문서). **이미지가 자기 크기를 알고 있으면 그것이 권위다.**
+         */
+        fw_size = wr_index;
         {
-          uint32_t n = wr_index - i;
+          firm_ver_t ver;
+
+          if (flashRead(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + FLASH_SIZE_VEC,
+                        (uint8_t *)&ver, sizeof(ver)) == true &&
+              ver.magic_number == VERSION_MAGIC_NUMBER &&
+              ver.firm_size > 0 &&
+              ver.firm_size <= wr_index)
+          {
+            fw_size = ver.firm_size;
+          }
+        }
+
+        for (uint32_t i=0; i<fw_size && err_code == OK; i+=sizeof(buf))
+        {
+          uint32_t n = fw_size - i;
 
           if (n > sizeof(buf)) n = sizeof(buf);
           if (flashRead(FLASH_ADDR_FIRM_VEC + i, buf, n) != true)
@@ -308,7 +363,7 @@ bool cmdBootProcess(cmd_t *p_cmd)
         memset(&tag, 0, sizeof(tag));
         tag.magic_number = TAG_MAGIC_NUMBER;
         tag.fw_addr      = FLASH_SIZE_TAG;
-        tag.fw_size      = wr_index;
+        tag.fw_size      = fw_size;
         tag.fw_crc       = crc;
         tag.tag_crc      = utilCalcCRC(0, (uint8_t *)&tag, sizeof(tag) - 4);
 
@@ -320,7 +375,8 @@ bool cmdBootProcess(cmd_t *p_cmd)
         {
           //-- 커밋 성공. 폴트 카운터를 접는다 (uf2.c 와 같은 이유)
           resetSetFaultCount(0);
-          logPrintf("[  ] fw end %d bytes, crc 0x%04X\n", (int)wr_index, crc);
+          logPrintf("[  ] fw end %d bytes (rx %d), crc 0x%04X\n",
+                    (int)fw_size, (int)wr_index, crc);
         }
       }
 

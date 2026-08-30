@@ -67,8 +67,11 @@ def main():
         sys.exit("펌웨어 .bin 을 찾지 못했다. 먼저 빌드한다.")
 
     fw = open(path, "rb").read()
-    if len(fw) % 16:
-        fw += b"\xFF" * (16 - len(fw) % 16)      # 쿼드워드 정렬
+    #-- **패딩하지 않는다.** 16바이트 정렬은 STM32H5 내부 플래시(쿼드워드 단위
+    #   프로그래밍) 요구였다. 여기 대상은 QSPI 이고 페이지 프로그램은 바이트
+    #   단위다. 패딩하면 그 길이가 태그의 fw_size 로 들어가 .version 의
+    #   firm_size 와 어긋나고, 부트로더가 stale tag 로 판정해 VER 로 강등한다.
+    #   (같은 실수를 UF2 경로에서도 했다. 10 문서)
 
     ch = open_channel(args)
 
