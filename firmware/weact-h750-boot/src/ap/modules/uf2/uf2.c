@@ -129,12 +129,45 @@ bool uf2FlashFlush(void)
   uint16_t   crc = 0;
   uint8_t    buf[256];
 
+  uint32_t   fw_size;
+
   if (flash_len == 0) return false;
 
-  //-- CRC 는 굽는 경로와 같은 indirect 로 다시 읽어 계산한다 (07 문서)
-  for (uint32_t i=0; i<flash_len; i+=sizeof(buf))
+  /*
+   * 태그에 넣을 크기를 정한다. **`flash_len` 을 그대로 쓰면 안 된다.**
+   *
+   * `flash_len` 은 UF2 블록이 실제로 덮은 최대 끝 오프셋이다. UF2 는 512B 블록마다
+   * 256B 페이로드를 나르므로 **마지막 블록이 256B 경계로 패딩**된다. 즉 실제
+   * 이미지보다 최대 255B 크다.
+   *
+   * 실측: 98,744B 이미지 -> 386블록 -> flash_len = 98,816 (72B 초과)
+   *
+   * 그대로 태그에 쓰면 `.version` 의 `firm_size` 와 어긋나서, 다음 부팅에
+   * 부트로더가 **"stale tag" 로 판정하고 태그를 다시 만든다.** 자가 교정되므로
+   * 벽돌은 아니지만 매번 헛돌고, CRC 도 패딩을 포함한 값이라 CDC(`FW_END`)로
+   * 구운 것과 달라진다. 같은 이미지가 경로에 따라 다른 태그를 갖게 된다.
+   *
+   * 이미지에 `.version` 이 있으면 그 `firm_size` 가 **권위 있는 값**이다.
+   * 없으면(RAW 이미지) `flash_len` 밖에 알 방법이 없으니 그대로 쓴다.
+   */
+  fw_size = flash_len;
   {
-    uint32_t len = flash_len - i;
+    firm_ver_t ver;
+
+    if (flashRead(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + FLASH_SIZE_VEC,
+                  (uint8_t *)&ver, sizeof(ver)) == true &&
+        ver.magic_number == VERSION_MAGIC_NUMBER &&
+        ver.firm_size > 0 &&
+        ver.firm_size <= flash_len)
+    {
+      fw_size = ver.firm_size;
+    }
+  }
+
+  //-- CRC 는 굽는 경로와 같은 indirect 로 다시 읽어 계산한다 (07 문서)
+  for (uint32_t i=0; i<fw_size; i+=sizeof(buf))
+  {
+    uint32_t len = fw_size - i;
 
     if (len > sizeof(buf)) len = sizeof(buf);
     if (flashRead(FLASH_ADDR_FIRM + FLASH_SIZE_TAG + i, buf, len) != true) return false;
@@ -144,7 +177,7 @@ bool uf2FlashFlush(void)
   memset(&tag, 0, sizeof(tag));
   tag.magic_number = TAG_MAGIC_NUMBER;
   tag.fw_addr      = FLASH_SIZE_TAG;
-  tag.fw_size      = flash_len;
+  tag.fw_size      = fw_size;
   tag.fw_crc       = crc;
   tag.tag_crc      = utilCalcCRC(0, (uint8_t *)&tag, sizeof(tag) - 4);
 
@@ -160,7 +193,8 @@ bool uf2FlashFlush(void)
    */
   resetSetFaultCount(0);
 
-  logPrintf("[  ] uf2 flush : %d bytes, crc 0x%04X\n", (int)flash_len, crc);
+  logPrintf("[  ] uf2 flush : %d bytes (blk %d), crc 0x%04X\n",
+            (int)fw_size, (int)flash_len, crc);
   return true;
 }
 
@@ -282,10 +316,35 @@ void uf2Update(void)
       break;
 
     case 2:
+      /*
+       * **여기서 `delay()` 를 쓰면 안 된다.**
+       *
+       * 부트로더의 `delay()` 는 `cliLoopIdle()` -> `moduleUpdate()` 를 부른다.
+       * 그러면 이 함수가 state 2 인 채로 다시 들어와 또 `delay()` 를 부른다.
+       * **무한 재귀다.** 실기에서 "uf2 -> jump" 만 끝없이 찍히고 `bootJumpFirm()`
+       * 에는 영영 도달하지 못했다. 파일은 정상적으로 구워졌는데 자동 점프만
+       * 안 되는, 원인을 짚기 어려운 형태로 나타난다.
+       *
+       * `reset.c` 의 더블탭 판정이 같은 이유로 `HAL_Delay()` 를 쓴다.
+       *
+       * 다만 여기서는 `HAL_Delay()` 도 맞지 않는다. 이 300ms 는 호스트가 마지막
+       * 응답을 받아갈 시간이라 그동안 USB 는 계속 돌아야 한다. 그래서
+       * `usbUpdate()`(= `tud_task()`) 만 직접 돌린다. `moduleUpdate()` 를 거치지
+       * 않으므로 재진입이 없다.
+       */
+      state = 3;                 // 재진입 방어. 아래 루프가 이 함수를 다시 부르지는
+                                 // 않지만, 실패 경로로 돌아올 때까지 잠가둔다.
       if (bootVerifyFirm() != BOOT_IMG_NONE)
       {
+        uint32_t t = millis();
+
         logPrintf("[  ] uf2 -> jump\n");
-        delay(UF2_JUMP_WAIT_MS);
+        while (millis() - t < UF2_JUMP_WAIT_MS)
+        {
+#ifdef _USE_HW_USB
+          usbUpdate();
+#endif
+        }
         bootJumpFirm();
       }
       //-- 점프에 실패해도 벽돌이 아니다. 다시 복사할 수 있게 되돌린다.
@@ -293,6 +352,10 @@ void uf2Update(void)
       is_done_req = false;
       is_jump_req = false;
       state = 0;
+      break;
+
+    case 3:
+      //-- 점프 준비 중. 재진입을 무시한다.
       break;
   }
 }
