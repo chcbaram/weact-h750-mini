@@ -160,37 +160,53 @@ class HidTransport:
 DEV_MODE_BOOT = 0
 DEV_MODE_APP  = 1
 
+#-- 펌웨어의 boot_info_t / boot_version_t 와 **바이트 단위로 맞아야 한다.**
+#   정의는 firmware/weact-h750-boot/src/ap/modules/cmd/process/cmd_boot.c 다.
+#   둘 다 __attribute__((packed)) 이므로 여기서도 패딩을 넣지 않는다.
+#
+#   [함정] 이 파일은 stm32h5-w6300 에서 가져왔는데 거기는 A/B 슬롯 구조였다.
+#   슬롯 필드를 그대로 두면 길이가 안 맞아 struct.error 로 죽는다.
+#   이 보드는 슬롯이 없다 (QSPI 전체가 단일 펌웨어 영역, 00 문서).
+INFO_FMT = "<10I32s32s"
+INFO_SZ  = struct.calcsize(INFO_FMT)          # 40 + 64 = 104
+
 def parse_info(d):
     """연결 직후 가장 먼저 부른다.
 
-    부트로더와 앱이 같은 VID/PID 로 열거되므로 USB 만으로는 구분할 수 없다.
-    mode 로 판별한다.
+    부트로더와 앱이 같은 VID 로 열거되므로(PID 는 다르다) mode 로 판별한다.
     """
-    f = struct.unpack("<8I", d[:32])
-    out = dict(zip(("magic","mode","boot_addr","firm_addr","firm_size",
-                    "slot_size","slot_max","family_id"), f))
+    if len(d) < INFO_SZ:
+        raise ValueError("INFO 응답이 %d 바이트다. %d 를 기대했다 - "
+                         "펌웨어의 boot_info_t 와 어긋난 것이다." % (len(d), INFO_SZ))
+
+    f = struct.unpack(INFO_FMT, d[:INFO_SZ])
+    out = dict(zip(("magic","mode","boot_addr","boot_size","firm_addr",
+                    "firm_vec_addr","firm_size","tag_size","max_fw_size",
+                    "family_id"), f[:10]))
     z = lambda b: b.split(b"\0")[0].decode("ascii", "replace").strip()
-    out["name"]    = z(d[32:64])
-    out["version"] = z(d[64:96])
+    out["name"]     = z(f[10])
+    out["version"]  = z(f[11])
     out["mode_str"] = "BOOT" if out["mode"] == DEV_MODE_BOOT else "APP"
     return out
 
 
-ITEM_FMT = "<BBHIIII32s32s"
-ITEM_SZ  = struct.calcsize(ITEM_FMT)
+#-- boot_version_t. 슬롯이 없으므로 항목 하나뿐이다.
+VER_FMT  = "<B3sII32s32s"
+VER_SZ   = struct.calcsize(VER_FMT)           # 1+3+4+4+32+32 = 76
 
-def _item(d):
-    v, idx, _, addr, seq, sz, crc, name, ver = struct.unpack(ITEM_FMT, d[:ITEM_SZ])
+IMG_TYPE = ("NONE", "RAW", "VER", "TAG")      # BootImgType_t
+
+def parse_version(d):
+    """이미지 식별 3단계(TAG/VER/RAW)와 크기·CRC 를 돌려준다. 07 문서."""
+    if len(d) < VER_SZ:
+        raise ValueError("VERSION 응답이 %d 바이트다. %d 를 기대했다 - "
+                         "펌웨어의 boot_version_t 와 어긋난 것이다." % (len(d), VER_SZ))
+
+    img, _rsv, size, crc, name, ver = struct.unpack(VER_FMT, d[:VER_SZ])
     z = lambda s: s.split(b"\0")[0].decode("ascii", "replace").strip()
-    return dict(valid=bool(v), index=idx, addr=addr, seq=seq,
-                fw_size=sz, fw_crc=crc, name=z(name), version=z(ver))
-
-def parse_version(d, slot_max=2):
-    out = {"firm": _item(d)}
-    out["slot"] = [_item(d[ITEM_SZ*(i+1):]) for i in range(slot_max)]
-    w, p, r, _ = struct.unpack("<bbbb", d[ITEM_SZ*(slot_max+1):ITEM_SZ*(slot_max+1)+4])
-    out.update(write_slot=w, pending_slot=p, rollback_slot=r)
-    return out
+    return dict(img_type=img,
+                img_str=IMG_TYPE[img] if img < len(IMG_TYPE) else "?",
+                fw_size=size, fw_crc=crc, name=z(name), version=z(ver))
 
 
 class TcpTransport:

@@ -215,3 +215,41 @@ flashErase(FLASH_ADDR_FIRM, len);
 | 98,808 B | 131,072 B | 2 | 28,168 B |
 | 242,092 B | 262,144 B | 4 | 15,956 B |
 | 1,048,576 B | 1,114,112 B | 17 | 61,440 B |
+
+## 호스트 툴(`download.py`)이 처음부터 깨져 있었다
+
+2026-08-30 에 소거 시간을 재려다 발견했다.
+
+```
+cmdproto.py:183  struct.error: unpack requires a buffer of 84 bytes
+```
+
+`parse_info()` 와 `parse_version()` **둘 다** `stm32h5-w6300` 의 **A/B 슬롯 구조**를
+그대로 파싱하고 있었다. 이 보드는 슬롯이 없다(QSPI 전체가 단일 펌웨어 영역).
+
+```
+              펌웨어(packed)                호스트(가져온 것)
+INFO      10 x u32 + 32 + 32 = 104 B     8 x u32 + name/version 오프셋도 다름
+VERSION   1+3+4+4+32+32     =  76 B     84 B 슬롯 항목 x 3 + 4
+```
+
+`download.py` 본문도 슬롯 시대였다 — `FW_BEGIN` 응답에서 `slot` 을 꺼내고,
+`FW_VERIFY` 에 슬롯 번호를 넘기고, `ERR_BOOT_NO_PENDING` 을 처리했다.
+우리 펌웨어는 셋 다 없다.
+
+**왜 아무도 안 밟았나** : CDC 업로드를 전부 아두이노 세션의 `baramdl` 로만 했다.
+"CDC 업로드가 동작한다" 는 사실이었지만 **그 툴로는 아니었다.**
+STATUS 진단 절차 4번이 여기서 나왔다.
+
+고친 뒤 구조는 이렇다.
+
+```
+INFO_FMT = "<10I32s32s"      # 104 B
+VER_FMT  = "<B3sII32s32s"    #  76 B
+```
+
+길이가 안 맞으면 `struct.error` 대신 **"펌웨어의 boot_info_t 와 어긋난 것이다"**
+라고 말하게 했다. 다음에 구조체를 바꾸면 바로 알 수 있다.
+
+흐름도 다시 썼다. `INFO` 로 부트로더인지 앱인지 먼저 가르고, **앱이면 `FW_UPDATE`
+로 부트로더 진입만 요청하고 끝낸다** — 앱에서 `FW_*` 를 보내면 거부당한다(12 문서).
