@@ -180,6 +180,23 @@ MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;   // 실행 허용
 이름이 헷갈리는데, `DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE` 이 **실행을 허용**한다는
 뜻이다. 이게 없으면 앱으로 점프하는 순간 MemManage 폴트가 난다.
 
+### 실기 확인 (2026-08-30, V260830R4 적용 후)
+
+앱이 도는 상태에서 SWD 로 읽었다.
+
+```
+MPU_CTRL 0x00000005            ENABLE=1, PRIVDEFENA=1
+R1  RBAR 0x24000001  RASR 0x13020025   0x24000000 512KB  TEX=000 C=1 B=0 S=0 XN=1  write-through
+R2  RBAR 0x30000002  RASR 0x130c0023   0x30000000 256KB  TEX=001 C=0 B=0 S=1 XN=1  non-cacheable
+R3  RBAR 0x30040003  RASR 0x130c001d   0x30040000  32KB  TEX=001 C=0 B=0 S=1 XN=1  non-cacheable
+R4  disabled
+```
+
+`SIZE = (RASR >> 1) & 0x1F`, 크기 = `2^(SIZE+1)`. 256KB → 17, 32KB → 14.
+
+적용 후 리셋 20회 반복해서 **점프 성공 20 / 실패 0** 을 확인했다 (STATUS 의
+"N회 반복" 규칙).
+
 ## 함정
 
 - **`BaseAddress` 는 `Size` 에 정렬돼 있어야 한다.** 안 맞으면 조용히 엉뚱한 영역이 잡힌다.
