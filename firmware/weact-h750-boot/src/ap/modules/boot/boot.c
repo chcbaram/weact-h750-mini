@@ -299,7 +299,21 @@ BootImgType_t bootVerifyFirm(void)
     {
       uint16_t crc = 0;
 
-      bootCalcCrc(FLASH_ADDR_FIRM + FLASH_SIZE_TAG, firm_tag.fw_size, &crc);
+      /*
+       * **반환값을 반드시 본다.**
+       *
+       * 예전에는 버렸다. 그러면 QSPI 읽기가 실패해도 `crc` 가 초기값 0 인 채로
+       * 내려와 로그가 `fw crc 0x0000 != 0xXXXX` 로 나온다. 즉 **"플래시를 못
+       * 읽었다" 와 "이미지가 실제로 깨졌다" 가 같은 메시지로 뭉갠다.**
+       * 간헐 결함을 쫓을 때 정확히 이 구분이 필요하다.
+       */
+      if (bootCalcCrc(FLASH_ADDR_FIRM + FLASH_SIZE_TAG,
+                      firm_tag.fw_size, &crc) != OK)
+      {
+        logPrintf("     [E_] tag crc read fail (qspi)\n");
+        img_type = BOOT_IMG_NONE;
+        return img_type;
+      }
 
       if (crc == (uint16_t)firm_tag.fw_crc)
       {
@@ -346,7 +360,16 @@ bool bootPromoteTag(void)
   logPrintf("[  ] bootPromoteTag() size %d\n", (int)fw_size);
 
   if (bootBeginRead() != true) return false;
-  bootCalcCrc(FLASH_ADDR_FIRM + FLASH_SIZE_TAG, fw_size, &crc);
+  /*
+   * 여기서 반환값을 버리면 **읽기 실패로 계산된 엉터리 CRC 가 태그에 영구
+   * 기록된다.** 다음 부팅부터 CRC 검증이 계속 실패하고, 멀쩡한 이미지가
+   * 깨진 것으로 보인다. 승격은 실패해도 되지만 잘못된 태그를 남기면 안 된다.
+   */
+  if (bootCalcCrc(FLASH_ADDR_FIRM + FLASH_SIZE_TAG, fw_size, &crc) != OK)
+  {
+    logPrintf("     [E_] promote: crc read fail (qspi)\n");
+    return false;
+  }
 
   memset(&tag, 0, sizeof(tag));
   tag.magic_number = TAG_MAGIC_NUMBER;

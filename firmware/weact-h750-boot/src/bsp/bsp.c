@@ -69,9 +69,54 @@ bool bspInit(void)
  */
 bool bspDeInit(void)
 {
+  //-- 1. 인터럽트를 먼저 막는다.
   for (int i=0; i<8; i++)
   {
     NVIC->ICER[i] = 0xFFFFFFFF;
+    __DSB();
+    __ISB();
+  }
+
+  /*
+   * 2. **부트로더가 켠 페리페럴을 리셋한다.**
+   *
+   * NVIC 마스크만으로는 부족하다. `ICER`/`ICPR` 은 **NVIC 쪽 래치**만 건드리고
+   * **페리페럴 자신의 상태 플래그는 그대로 남는다.** 앱이 그 페리페럴을 초기화한
+   * 뒤 `HAL_NVIC_EnableIRQ()` 를 부르는 순간, 아직 서 있는 IRQ 라인이 곧바로
+   * 다시 래치되어 인터럽트가 뜬다. 핸들이 준비되기 전이면 엉뚱한 곳을 건드린다.
+   *
+   * **실기에서 잡았다.** 리셋을 반복하면 앱이 42.5% 확률로 굳었고, 폴트 서명이
+   * 이랬다.
+   *
+   *   CFSR  0x00000400   BFSR bit10 IMPRECISERR
+   *   ICSR  VECTACTIVE=3 HardFault 로 에스컬레이션
+   *   xPSR  ISR_NUMBER=100 -> **IRQn 84 = SPI4** (= LCD)
+   *
+   * 원인은 점프 직전 `uiShowJump()` 가 도는 **SPI4 DMA 전송**이었다.
+   * `lcdUpdateDraw()` 가 완료를 기다리므로 전송 자체는 끝나지만, SPI4 와
+   * DMA1_Stream1 의 **완료 플래그가 선 채로** 앱에 넘어갔다.
+   *
+   * 규약은 그대로다 — "페리페럴은 앱이 초기화한다"(12 문서). 다만 **부트로더가
+   * 시작한 것은 부트로더가 멈춘다.** NVIC 만 막고 페리페럴을 살려 보내는 것이
+   * 어중간했다.
+   *
+   * QUADSPI 는 **절대 리셋하지 않는다.** 앱이 거기서 명령어를 인출한다.
+   * USART1 도 두는데, 마지막 로그 줄이 잘리면 진단이 어려워지기 때문이다
+   * (TX 는 DMA 를 쓰지 않아 DMA1 리셋과 무관하다).
+   */
+#ifdef _USE_HW_SPI
+  __HAL_RCC_SPI4_FORCE_RESET();
+  __HAL_RCC_SPI4_RELEASE_RESET();
+#endif
+  //-- DMA1_Stream1 = SPI4_TX, Stream0 = USART1_RX. 둘 다 DMA1 이다.
+  __HAL_RCC_DMA1_FORCE_RESET();
+  __HAL_RCC_DMA1_RELEASE_RESET();
+  __DSB();
+  __ISB();
+
+  //-- 3. **리셋 과정에서 새로 뜬 것까지** 지우려면 pending clear 가 뒤에 와야 한다.
+  for (int i=0; i<8; i++)
+  {
     NVIC->ICPR[i] = 0xFFFFFFFF;
     __DSB();
     __ISB();

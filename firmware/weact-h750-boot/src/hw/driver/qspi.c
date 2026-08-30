@@ -1047,9 +1047,54 @@ static uint8_t QSPI_ResetMemory(QSPI_HandleTypeDef *p_hqspi)
     HAL_QSPI_Abort(p_hqspi);
   }
 
+  /*
+   * **연속 읽기 모드를 먼저 명시적으로 푼다.**
+   *
+   * XiP 설정이 `AlternateBytes = 0x20`(M5:M4 = 10b) 이라 앱이 도는 동안 플래시는
+   * **연속 읽기 모드**에 있다. 이 상태의 플래시는 다음 트랜잭션에서 **명령
+   * 바이트를 아예 기대하지 않는다** — 곧바로 주소 24비트 + 모드 8비트를
+   * 기다린다.
+   *
+   * NRST 나 SYSRESETREQ 는 **MCU 만 리셋한다. 플래시는 리셋하지 않는다.**
+   * (이 보드는 W25Q64 의 /RESET 이 배선돼 있지 않다.) 그래서 워엄 리셋 직후의
+   * 플래시는 연속 읽기 모드 그대로다. 아래 `0x66` 을 보내면 플래시는 그것을
+   * **주소로 읽는다.** 리셋이 안 걸린다.
+   *
+   * 그동안 대부분 동작한 것은 **우연이었다.** 1-line 으로 보내는 `0x66` 이
+   * 8클럭을 주는데, 연속 읽기 모드의 플래시는 그 8클럭을 IO0~3 에서 4비트씩
+   * 32비트(주소 24 + 모드 8)로 받는다. 그때 **IO1~3 은 아무도 몰지 않는다.**
+   * 뜬 값이 모드 비트 자리에서 `10b` 가 아니면 연속 읽기가 풀리고 뒤의 `0x99`
+   * 부터 정상 명령으로 먹힌다. 하필 `10b` 로 읽히면 안 풀린다.
+   *
+   * **뜬 핀 값에 정확성을 기대는 것은 결함이다.** 명령 없이 4-line 주소 +
+   * `AlternateBytes = 0x00`(M5:M4 = 00) 을 보내 확정적으로 푼다. 플래시가 이미
+   * 정상 상태면 이 트랜잭션은 유효하지 않은 명령으로 무시된다 — 무해하다.
+   */
+  s_command.InstructionMode   = QSPI_INSTRUCTION_NONE;
+  s_command.AddressMode       = QSPI_ADDRESS_4_LINES;
+  s_command.AddressSize       = QSPI_ADDRESS_24_BITS;
+  s_command.Address           = 0;
+  s_command.AlternateByteMode = QSPI_ALTERNATE_BYTES_4_LINES;
+  s_command.AlternateBytesSize= QSPI_ALTERNATE_BYTES_8_BITS;
+  s_command.AlternateBytes    = 0x00;          // M5:M4 = 00 -> 연속 읽기 해제
+  s_command.DataMode          = QSPI_DATA_NONE;
+  s_command.DummyCycles       = 0;
+  s_command.DdrMode           = QSPI_DDR_MODE_DISABLE;
+  s_command.DdrHoldHalfCycle  = QSPI_DDR_HHC_ANALOG_DELAY;
+  s_command.SIOOMode          = QSPI_SIOO_INST_EVERY_CMD;
+
+  //-- 실패해도 무시한다. 이미 정상 상태면 실패하는 것이 정상이다.
+  HAL_QSPI_Command(p_hqspi, &s_command, HAL_QPSI_TIMEOUT_DEFAULT_VALUE);
+
+  if (HAL_QSPI_GetState(&hqspi) != HAL_QSPI_STATE_READY)
+  {
+    HAL_QSPI_Abort(p_hqspi);
+  }
+
   /* Initialize the reset enable command */
   s_command.InstructionMode   = QSPI_INSTRUCTION_1_LINE;
   s_command.Instruction       = RESET_ENABLE_CMD;
+  s_command.AlternateByteMode = QSPI_ALTERNATE_BYTES_NONE;
   s_command.AddressMode       = QSPI_ADDRESS_NONE;
   s_command.AlternateByteMode = QSPI_ALTERNATE_BYTES_NONE;
   s_command.DataMode          = QSPI_DATA_NONE;
