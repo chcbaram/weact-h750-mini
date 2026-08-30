@@ -1027,8 +1027,37 @@ uint8_t BSP_QSPI_EnableMemoryMappedMode(void)
   s_command.DdrHoldHalfCycle  = QSPI_DDR_HHC_ANALOG_DELAY;
   s_command.SIOOMode          = QSPI_SIOO_INST_ONLY_FIRST_CMD;
 
-  s_mem_mapped_cfg.TimeOutActivation = QSPI_TIMEOUT_COUNTER_ENABLE;
-  s_mem_mapped_cfg.TimeOutPeriod     = 0x20;
+  /*
+   * **타임아웃 카운터를 켜면 안 된다.** ST 에라타다 (ES0392, H750xB 포함).
+   *
+   *   타임아웃 플래그 TOF 가 **새 memory-mapped 읽기 요청과 같은 클럭 엣지에
+   *   세트되면 그 읽기가 실패한다.**
+   *   워크어라운드: 타임아웃 카운터를 끈다. (nCS 를 올리고 싶으면 읽기마다
+   *   abort 하라고 되어 있는데, XiP 에서는 불가능하다.)
+   *
+   * 카운터는 **QSPI 클럭 사이클**을 센다. `0x20` = 32 SCK 사이클이면 120MHz 에서
+   * 겨우 267ns 다. D1 AXI 패브릭 경합(SDMMC IDMA 가 AXI SRAM 에 쓰는 동안)으로
+   * CPU 의 인출이 그만큼 멈추면 TOF 가 서고, 하필 새 요청과 같은 엣지면 깨진다.
+   *
+   * **증상이 지독하다.** 메모리에는 멀쩡한 명령어가 있는데 CPU 가 다른 것을
+   * 인출한다. `CFSR = 0x00010000`(UNDEFINSTR)이 정상 `bl` 경계에서 난다.
+   *
+   * 실측 (아두이노 세션의 SD 스케치, SCK 120MHz, 각 조건 단일 변수)
+   *
+   *   타임아웃 ON   SdAlign  폴트 20/20   SdBench 폴트 10/10
+   *   타임아웃 OFF  SdAlign  폴트  0/20   SdBench 폴트  0/10
+   *   SCK 60MHz(ON) SdAlign  폴트  9/20   <- 창이 넓어질 뿐 안 없어진다
+   *
+   * **이 설정은 내가 XiP 브링업 때 직접 넣은 것이다.** 그때 memory-mapped 읽기가
+   * 불안정해서 이것저것 시도하다 넣었고 증상이 줄어드는 것처럼 보였다.
+   * 원인을 없앤 것이 아니라 심은 것이었다. `boot.c` 의 "XiP 로 검증하면 읽은 값이
+   * 다르다" 주석도 같은 원인일 가능성이 높다.
+   *
+   * nCS 가 계속 낮게 유지되는 트레이드오프가 있다. XiP 에서는 정상적인 선택이고,
+   * indirect 로 내려갈 때는 `qspiAbort()` 가 nCS 를 올린다.
+   */
+  s_mem_mapped_cfg.TimeOutActivation = QSPI_TIMEOUT_COUNTER_DISABLE;
+  s_mem_mapped_cfg.TimeOutPeriod     = 0;
 
   if (HAL_QSPI_MemoryMapped(&hqspi, &s_command, &s_mem_mapped_cfg) != HAL_OK)
   {
