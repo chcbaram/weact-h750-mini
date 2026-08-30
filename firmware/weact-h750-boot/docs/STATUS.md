@@ -173,6 +173,22 @@ HID 는 `hidapi` 필요. 사용자 환경을 건드리지 않으려면 격리 ve
 `cmdproto.py` 의 `HidTransport` 가 세 PID 를 순서대로 시도한다.
 (0xCAFE 는 TinyUSB 예제용이라 폐기. `1209:B010` 은 이미 남이 등록돼 있었다 — 08 문서)
 
+### 시리얼보다 디버거로 전역 변수를 읽는 쪽이 빠르다
+
+USB CDC 로 상태를 찍게 하면 **재열거 구간에서 `setup()` 출력이 통째로 날아간다.**
+포트가 사라졌다 다시 생기는 사이라 호스트가 못 받는다. 열 번 시도해서 열 번
+놓치는 일이 실제로 있었다 (카메라 세션).
+
+전역 변수를 `nm` 으로 찾아 `mdw` 로 읽으면 그 문제가 없고, 업로드 직후에도
+바로 읽힌다.
+
+```bash
+arm-none-eabi-nm build/app.elf | grep my_state
+openocd -f tools/openocd/weact-h750.cfg -c init -c halt -c "mdw 0x240004d0 4" -c resume -c shutdown
+```
+
+`.noinit` 에 두면 리셋도 건너 살아남는다.
+
 ### 화면을 눈으로 안 보고 확인하기
 
 프레임버퍼가 D2 SRAM 에 그대로 남아 있고, 앱은 LCD 를 안 건드린다.

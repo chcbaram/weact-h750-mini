@@ -29,7 +29,49 @@ QSPI 에서 XiP 로 실행되는 애플리케이션이 지켜야 할 것과, 부
 | MSP | **설정하지 않는다.** 앱 `Reset_Handler` 의 `ldr sp, =_estack` 이 잡는다<br>(**단, 부트로더에 RTOS 를 켜면 조건이 깨진다 — 아래 참고**) |
 | VTOR | **건드리지 않는다.** 앱 `SystemInit()` 이 옮긴다 |
 | CONTROL | 0. 앱은 처음부터 끝까지 **MSP** 로 돈다 (PSP 미사용) |
-| NVIC | 점프 직전 전부 disable + clear, SysTick 정지, 캐시 clean/invalidate |
+| NVIC | 점프 직전 전부 disable(`ICER`) + pending clear(`ICPR`), SysTick 정지, 캐시 clean/invalidate |
+| **페리페럴** | **하나도 리셋하지 않는다.** DMA/SPI4/USART1/QUADSPI/USB 가 부트로더가 쓰던 설정 그대로 간다 (아래 참고) |
+
+### 페리페럴은 리셋되지 않는다 — 특히 DMA
+
+`bspDeInit()` 이 하는 일은 **NVIC 마스크 + pending clear + SysTick 정지 + 캐시 flush**
+가 전부다. 페리페럴 레지스터는 **하나도 건드리지 않는다.**
+
+이것이 의도적인 이유는, 어디서 멈출지 선을 그을 수 없기 때문이다. 부트로더는
+SPI4(LCD), USART1(로그), QUADSPI(XiP, **절대 리셋하면 안 된다**), USB, RTC, GPIO 를
+모두 쓴다. DMA 만 골라 리셋하면 일관성이 없고, 전부 리셋하면 점프 경로가 그만큼
+길고 예민해진다. **앱이 자기가 쓸 페리페럴을 초기화한다** 가 규약이다.
+
+#### `ICPR` 을 지워도 소용없는 이유
+
+여기가 함정이다. `bspDeInit()` 은 `NVIC->ICPR` 로 pending 을 지우지만, 그것은
+**NVIC 쪽 래치**일 뿐이다. **페리페럴 자신의 플래그는 그대로 남는다.**
+
+부트로더가 넘길 때 DMA1 은 이런 상태다.
+
+```
+DMA1_Stream?  CR: 부트로더 설정 (USART1 RX, CIRC, TCIE)
+DMA1->LISR    TCIFn 이 선 채로
+```
+
+앱이 `HAL_NVIC_EnableIRQ()` 를 부르는 **그 순간** 아직 서 있는 페리페럴 IRQ 라인이
+곧바로 다시 래치되어 인터럽트가 뜬다. 핸들이 초기화되기 전이면
+`HAL_DMA_IRQHandler()` 가 엉뚱한 플래그 위치를 보고 아무것도 못 지운다.
+
+**결과는 무한 재진입인데, 폴트가 아니다.** `CFSR = 0` 이고 아무 로그도 없이
+`loop()` 에 영원히 도달하지 못한다. 카메라(DCMI) 작업에서 실제로 났고, openocd 로
+halt 해서 **Handler 모드 / 외부 IRQ 11** 을 보고서야 잡혔다.
+
+#### 앱이 지켜야 할 순서
+
+```c
+HAL_DMA_Init(&hdma);                    // 1. 핸들과 스트림을 먼저 잡는다
+__HAL_DMA_CLEAR_FLAG(&hdma, ...);       // 2. 페리페럴 플래그를 지운다
+HAL_NVIC_ClearPendingIRQ(DMAx_Streamy_IRQn);
+HAL_NVIC_EnableIRQ(DMAx_Streamy_IRQn);  // 3. 그 다음에 NVIC 를 연다
+```
+
+`MspInit` 에서 NVIC 를 먼저 켜는 흔한 순서가 바로 이 버그를 만든다.
 
 ### 조건부 — 부트로더에 RTOS 를 켜면 MSP/CONTROL 을 넘겨야 한다
 
