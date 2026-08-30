@@ -232,3 +232,136 @@ LED (PE3)        -> 점멸 확인
 폴트 카운터      -> 0 유지
 SystemCoreClock  -> 64MHz (PLL1 미복구 상태)
 ```
+
+---
+
+# 앱 프로젝트 구현 (`weact-h750-fw`, 9단계)
+
+위 규약을 실제로 구현한 자체 앱이다. 아두이노 코어와 달리 **부트로더와 소스를
+공유**하므로 규약을 어길 여지가 적다.
+
+## 링커스크립트 `STM32H750VBTx_QSPI.ld`
+
+부트로더 것에서 FLASH 계열 영역만 바꿨다. RAM 배치는 동일하다.
+
+```
+VECTOR (rx) : 0x90001000, 1K       .isr_vector
+VER    (rx) : 0x90001400, 1K       .version
+FLASH  (rx) : 0x90001800, 8M - 6K  .text/.rodata/.data 의 LMA
+```
+
+`0x90000000` 의 **TAG 4KB 를 앱 링크 범위에서 제외**하는 것이 핵심이다. 부트로더가
+태그를 갱신할 때 그 섹터만 지우는데, 앱이 걸쳐 있으면 벡터 테이블이 함께 날아간다.
+
+### `_fw_flash_size` 는 SECTIONS **바깥**에 둔다
+
+```
+SECTIONS { ... }
+
+_fw_flash_size = _fw_flash_end - _fw_flash_begin;
+```
+
+SECTIONS 안에 두면 출력 섹션에 묶여 상대 심볼이 된다. 바깥이어야 절대 심볼이다.
+빌드 후 `nm` 으로 확인할 것 — 타입이 **`A`** 여야 한다.
+
+```
+90001000 R _fw_flash_begin
+900191b8 N _fw_flash_end
+000181b8 A _fw_flash_size      <- A(절대). 값이 곧 크기다
+```
+
+## 확인 방법 (실기 없이)
+
+빌드만으로 규약 위반을 대부분 잡을 수 있다.
+
+```sh
+# 배치
+arm-none-eabi-objdump -h build/weact-h750-fw.elf | grep -E "isr_vector|\.version|\.text"
+#   .isr_vector 90001000 / .version 90001400 / .text 90001800
+
+# 절대 심볼과 크기 일치
+arm-none-eabi-nm build/weact-h750-fw.elf | grep _fw_flash
+ls -l build/weact-h750-fw.bin
+#   _fw_flash_size 값 == .bin 크기
+```
+
+`.version` 내용은 `.bin` 의 오프셋 `0x400` 에서 바로 읽힌다.
+
+```
+magic      'VER '
+firm_addr  0x90001000
+firm_size  98744        <- .bin 크기와 반드시 같아야 한다
+```
+
+**`firm_size` 가 0 이면 링커가 접은 것이다.** 그 상태로 구우면 부트로더가 VER 로
+판정하고도 CRC 범위를 0 으로 계산해 엉뚱한 태그를 만든다.
+
+UF2 는 첫 블록 헤더를 본다.
+
+```
+targetAddr 0x00000000     <- --base 0x0 가 먹었는가
+familyID   0xFFFF0004     <- 부트로더의 BOARD_UF2_FAMILY_ID 와 일치하는가
+```
+
+## 앱에서 뺀 것
+
+| 항목 | 이유 |
+|---|---|
+| `_USE_HW_QSPI` (드라이버 전체) | `qspiRead/Write/Erase` 가 전부 `qspiSetXipMode(false)` 를 거친다. **부르는 즉시 죽는다** |
+| MSC / UF2 모듈, `CFG_TUD_MSC 0` | UF2 로 굽는 것은 QUADSPI indirect 를 요구한다. 앱은 CDC+HID 만 연다 |
+| `bspMpuInit()` 호출 | `HAL_MPU_Disable()` 이 QSPI 속성을 잠깐 기본맵으로 되돌린다. 앱은 거기서 명령어를 인출 중이다 |
+| `RCC_PERIPHCLK_QSPI` / `_RTC` | 위 "앱이 절대 하면 안 되는 것" 참고 |
+| `bootUp()` / ui 모듈 | 판정과 진행률 표시는 부트로더의 몫이다 |
+
+## 한 파일이 두 모드를 처리한다
+
+`boot.c` 와 `cmd_boot.c` 는 `HW_DEV_MODE` 로 갈린다. **두 프로젝트가 같은 파일을
+쓰므로 복사본이 어긋나지 않는다.**
+
+`boot.c` 의 앱 분기는 읽기 두 개로 줄어든다.
+
+```c
+bool bootGetTag(firm_tag_t *p_tag)
+{
+  memcpy(p_tag, (const void *)FLASH_ADDR_FIRM, sizeof(firm_tag_t));
+  return p_tag->magic_number == TAG_MAGIC_NUMBER;
+}
+```
+
+indirect 가 아니라 **memory-mapped 역참조**다. 부트로더가 QUADSPI 를 열어둔 채
+넘겨주므로 항상 유효하고, 읽기에는 이것으로 충분하다.
+
+`cmd_boot.c` 는 앱에서 `FW_BEGIN`~`FW_VERIFY` 를 `ERR_BOOT_WRONG_CMD` 로 막는다.
+**게이트가 없으면 그 명령이 `flashErase()` → `qspiSetXipMode(false)` 를 타고
+자기 명령어 인출을 끊는다. 응답조차 못 보내고 그 자리에서 죽는다.**
+
+## 부수 효과 — 폴트 루프 차단이 앱에도 걸린다
+
+`.noinit` 심볼 배치가 부트로더와 **완전히 동일**하다(같은 파일을 쓰므로).
+
+```
+20000000 fault_bfar   20000004 fault_mmfar
+20000008 fault_hfsr   2000000c fault_cfsr
+20000010 fault_log (0x4c)      <- 양쪽 동일
+```
+
+그래서 앱이 폴트로 죽으면 앱의 `faultReset()` 이 세운 매직을 **부트로더가 그대로
+읽는다.** `faultIsFaultBoot()` 가 참이 되어 연속 폴트가 집계되고,
+`HW_BOOT_FAULT_MAX` 에 도달하면 부트로더가 점프를 거부한다 (07 문서).
+
+**아두이노 앱에서는 이게 안 된다** — 코어가 자기 `.noinit` 을 다른 주소에 잡으면
+부트로더가 매직을 못 보고 카운터를 접는다.
+
+앱은 `resetConfirmBoot()` 도 부른다(`HW_BOOT_CONFIRM_MS` = 3초 생존 시). 그래서
+부트로더의 `HW_BOOT_TRY_MAX` 를 켤 수 있는 **첫 앱**이다.
+
+## 빌드 결과
+
+```
+FLASH  96,696 B / 8,186 KB  (1.15%)
+RAM    30,704 B /   512 KB  (5.86%)
+D2RAM  28,832 B /   288 KB  (9.78%)   LCD 프레임버퍼
+산출물 .elf / .bin(98,744 B) / .hex / .uf2(197,632 B) / .map
+```
+
+**[미검증]** 실기 확인은 아직이다. 보드를 다른 세션이 쓰는 중이라 대기 중.

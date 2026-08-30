@@ -15,7 +15,7 @@
 | 6 | cmd 프로토콜 (HID/CDC) | **완료 · 실기** |
 | 7 | UF2 + MSC (FAT16) | **완료 · 실기** (드래그앤드롭 확인). 상한 8119 KB |
 | 8 | LCD 진행률 UI (+점프/에러 화면) | **완료 · 실기** |
-| 9 | 앱 프로젝트 `weact-h750-fw` | **스캐폴딩만** (아래 참고) |
+| 9 | 앱 프로젝트 `weact-h750-fw` | **빌드 완료** · 실기 미검증 (12 문서) |
 | 10 | 툴링 (openocd, tasks.json) | **완료 · 실기** (13 문서) |
 | 11 | 아두이노 코어 연동 | **별도 세션에서 진행 중** |
 
@@ -43,29 +43,28 @@ D2RAM : 28,832 B   9.78% / 288 KB (LCD 프레임버퍼 25,600 B)
 산출물: .elf / .bin / .hex / .map
 ```
 
-## 다음 세션 시작점 — 9단계 `weact-h750-fw`
+## 다음 할 일 — 9단계 실기 검증
 
-**부트로더(0~8단계)와 툴링(10단계)은 끝났다. 남은 것은 앱 프로젝트 하나다.**
+**코드는 전부 끝났다. 남은 것은 앱을 보드에 올려 보는 것 하나다.**
 
-`firmware/weact-h750-fw/` 는 아직 **부트로더 복사본**이다. 이름과 USB PID 만 바꿔둔
-상태이고 링커스크립트가 `STM32H750VBTx_BOOT.ld` 라 내부 플래시로 링크된다.
-빌드는 시도하지 않았다.
+`weact-h750-fw` 가 QSPI XiP 로 빌드된다(12 문서에 상세). 빌드 산출물로 확인할 수
+있는 것은 전부 확인했다 — 섹션 주소, `_fw_flash_size` 절대 심볼, `.version` 내용,
+UF2 헤더.
 
-할 일은 `docs/16-roadmap.md` 9단계에 8항목으로 정리해 두었다. 요점만:
+확인할 것:
 
-1. `src/bsp/ldscript/STM32H750VBTx_QSPI.ld` 새로 작성
-   (`VECTOR 0x90001000 / VER 0x90001400 / FLASH 0x90001800`)
-2. **`_fw_flash_size` 를 절대 심볼로** 만들 것 — 링커 접기 함정 (12 문서)
-3. `system_stm32h7xx.c` 에 `SCB->VTOR = (uint32_t)&_fw_flash_begin;`
-4. `hw_def.h` : `HW_DEV_MODE = HW_DEV_MODE_APP` (지금 BOOT 다)
-5. `SystemClock_Config` 에 **`RCC_PERIPHCLK_QSPI` / `_RTC` 를 넣지 말 것** (12 문서)
-6. post-build 에 `uf2conv.py --base 0x0 --family 0xFFFF0004`
-7. 앱이 `resetConfirmBoot()` 을 부르면 `HW_BOOT_TRY_MAX` 를 켤 수 있다
+1. SWD(`Flash - SWD (openocd stmqspi)`)로 태그 **없이** 굽는다
+2. 부트로더가 **VER** 로 판정하고 CRC 를 계산해 **TAG 로 승격**하는지
+3. 다음 부팅에 **TAG** 로 보고하는지
+4. 앱이 500ms LED 로 점멸하고 CDC+HID(PID `0xB752`)로 열거되는지
+5. `.uf2` 드래그앤드롭 경로
+6. `resetConfirmBoot()` 이 3초 뒤 불려 `DR6` 이 0 이 되는지
 
-앱이 생기면 **자체 제작 이미지로 3단계 식별(TAG/VER/RAW) 전 경로를 처음 끝까지**
-검증할 수 있다. 지금은 아두이노 빌드로만 확인했다.
+**이게 되면 자체 이미지로 3단계 식별 전 경로를 처음 끝까지 본 것이 된다.**
+지금까지는 아두이노 빌드로만 확인했다.
 
-`.vscode` 태스크/런처는 앱 프로젝트에 이미 들어가 있다 (빌드가 되면 바로 쓸 수 있다).
+되고 나면 부트로더 `hw_def.h` 의 `HW_BOOT_TRY_MAX` 를 켤 수 있다 — 앱이
+확인 신호를 보내는 첫 이미지다.
 
 ## 클럭 (확정)
 

@@ -1,50 +1,27 @@
 # 16. 남은 작업
 
-## 9단계 — 앱 프로젝트 `weact-h750-fw`
+## 9단계 — 앱 프로젝트 `weact-h750-fw`  **[코드 완료 · 실기 미검증]**
 
-`firmware/weact-h750-fw/` 에 부트로더 골격을 복사해 둔 상태다 (`src`, `tools`,
-`CMakeLists.txt`). **아직 XiP 용으로 고치지 않았다.**
+빌드까지 끝났다. 상세는 **12 문서** 아래쪽 "앱 프로젝트 구현" 절.
 
-해야 할 것:
+했던 것 (요약):
 
-1. **링커스크립트** `src/bsp/ldscript/STM32H750VBTx_QSPI.ld`
-   ```
-   VECTOR (rx) : 0x90001000, 1K
-   VER    (rx) : 0x90001400, 1K
-   FLASH  (rx) : 0x90001800, 8M - 6K
-   ```
-   `_fw_flash_begin` / `_fw_flash_end` 심볼과 `.version` 섹션 필수.
-   **`_fw_flash_size = _fw_flash_end - _fw_flash_begin;`** 절대 심볼도 만들 것
-   (12 문서의 링커 접기 함정).
-   `.data` 의 LMA 가 FLASH 에 마지막으로 놓여야 한다.
+1. `STM32H750VBTx_QSPI.ld` — `VECTOR 0x90001000 / VER 0x90001400 / FLASH 0x90001800`
+2. `_fw_flash_size` 를 SECTIONS **바깥**에 두어 절대 심볼로. `nm` 타입이 `A` 인지 확인
+3. `SCB->VTOR = (uint32_t)&_fw_flash_begin` (OR 가 아니라 대입)
+4. `hw_def.h` : `HW_DEV_MODE_APP`, LED 500ms, 한글 on, `_USE_HW_QSPI` **미정의**
+5. `PeriphCommonClock_Config` 에서 QSPI/RTC 를 빼고 USB 만 남김
+6. `bspMpuInit()` 호출 제거 — 부트로더 설정을 물려받는다
+7. post-build `.uf2` (`--base 0x0 --family 0xFFFF0004`)
+8. `resetConfirmBoot()` 추가 (3초 생존 시)
 
-2. **`system_stm32h7xx.c`** 에 `SCB->VTOR = (uint32_t)&_fw_flash_begin;`
+**중간에 발견한 것**: 스캐폴딩 복사본이 부트로더의 그동안 수정을 못 따라오고
+있었다 — QSPI 커널이 아직 `PLL2` 였다. 그대로 빌드했으면 `SystemInit()` 이 PLL2 를
+끄는 순간 자기 명령어 클럭이 끊겼을 것이다. 공유 파일 네 개를 재동기화했고,
+`boot.c` / `cmd_boot.c` 는 **한 파일이 두 모드를 처리**하게 고쳐서 앞으로
+복사본이 어긋나지 않게 했다.
 
-3. **`hw.c`** 가 `.version` 에 `firm_ver_t` 를 내보내되 `firm_size` 를 채울 것
-   (부트로더의 것은 `firm_size = 0` 으로 두어도 된다)
-
-4. **`hw_def.h`** : `HW_DEV_MODE = HW_DEV_MODE_APP`, `HW_LED_TOGGLE_MS = 500`,
-   `HW_LCD_HANGUL 1`(앱은 한글 써도 된다), USB PID 를 앱용으로
-
-5. **USB** : CDC + HID 만 (MSC 제외). `uf2` / `ui` 모듈 제거는 이미 되어 있음
-
-6. **`cmd_boot.c`** 는 `HW_DEV_MODE_APP` 로 컴파일되어 `FW_UPDATE`/`FW_JUMP` 가
-   `resetToBoot()` 이 된다 (이미 그렇게 작성돼 있음)
-
-7. **post-build** 에 `.bin` + `.uf2` 생성
-   `uf2conv.py --base 0x0 --family 0xFFFF0004` (**`--base 0x0` 필수**)
-
-8. **`SystemClock_Config`** — PLL1 을 설정해야 한다 (12 문서).
-   `RCC_PERIPHCLK_QSPI` 와 `RCC_PERIPHCLK_RTC` 는 넣지 말 것.
-
-9. **`resetConfirmBoot()` 호출** — 앱이 일정 시간 정상 동작한 뒤 부른다.
-   그래야 부트로더의 `HW_BOOT_TRY_MAX` 를 켤 수 있다. 지금은 0(비활성)인데,
-   아두이노 코어가 이 함수를 부르지 않아서 켜면 정상 스케치가 막히기 때문이다.
-   자체 앱에는 넣을 수 있다 (07 문서).
-
-> 현재 상태: `PRJ_NAME` 과 USB PID 만 앱용으로 바꿔뒀다. 링커스크립트가 아직
-> `STM32H750VBTx_BOOT.ld` 라 **빌드하면 내부 플래시로 링크된다.** 빌드 시도조차
-> 하지 않은 상태다. `.vscode` 태스크/런처는 이미 들어가 있다.
+**남은 것: 실기 검증.** STATUS 의 "다음 할 일" 참고.
 
 ## 10단계 — 툴링  **[완료]**
 
