@@ -6,7 +6,7 @@
 #include "assert_def.h"
 
 
-#define _DEF_FIRMWATRE_VERSION    "V260830R5"
+#define _DEF_FIRMWATRE_VERSION    "V260830R6"
 #define _DEF_BOARD_NAME           "WEACT-H750-BOOT"
 
 
