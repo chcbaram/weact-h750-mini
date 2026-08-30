@@ -59,8 +59,13 @@ bool bspInit(void)
  * 인터럽트를 전부 막지 않으면, 앱이 벡터 테이블(VTOR)을 옮기기 전에 남아 있던
  * 인터럽트가 떠서 부트로더의 핸들러 주소로 뛰어버린다.
  *
- * MPU 는 여기서 끄지 않는다. 앱이 자기 bspInit() 에서 다시 설정하고, 그 전까지는
- * QSPI 영역이 실행 가능해야 하기 때문이다.
+ * MPU 는 여기서 끄지 않는다. QSPI 영역이 실행 가능한 채로 넘어가야 앱의 첫
+ * 명령어를 인출할 수 있기 때문이다.
+ *
+ * **앱은 MPU 를 물려받아 그대로 쓴다.** 아두이노 코어에는 MPU 코드가 아예 없다
+ * (cores/variants/libraries 전부 확인). 자체 앱이 다시 설정할 수는 있지만
+ * 의무가 아니고, 현재 어느 앱도 하지 않는다. 즉 **여기 설정이 앱의 최종
+ * 메모리 속성이다.** 바꿀 때는 앱 쪽 영향을 먼저 따져야 한다. (12 문서)
  */
 bool bspDeInit(void)
 {
@@ -314,13 +319,34 @@ void bspMpuInit(void)
   MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
-  //-- R2 : D2 SRAM. LCD 프레임버퍼와 SPI4 DMA 버퍼(.non_cache)가 여기 있다.
-  //   DMA 가 직접 읽는 메모리라 non-cacheable 로 잡아야 캐시 유지보수 없이 안전하다.
-  //   실제 SRAM1+2+3 은 288KB 지만 MPU 크기는 2의 거듭제곱이어야 해서 512KB 로 잡는다.
+  /*
+   * R2 + R3 : D2 SRAM. LCD 프레임버퍼와 SPI4 DMA 버퍼(.non_cache)가 여기 있다.
+   *   DMA 가 직접 읽는 메모리라 non-cacheable 로 잡아야 캐시 유지보수 없이 안전하다.
+   *
+   * **리전을 둘로 쪼갠다.** 실재하는 것은 288KB 뿐이다.
+   *
+   *   SRAM1  0x30000000  128KB
+   *   SRAM2  0x30020000  128KB   -> R2 가 256KB 로 한 번에 덮는다
+   *   SRAM3  0x30040000   32KB   -> R3
+   *                      ------
+   *   끝     0x30048000
+   *
+   * 예전에는 512KB 한 개로 잡았다. 그러면 **0x30048000~0x3007FFFF 라는 실재하지
+   * 않는 주소가 Normal 메모리로 보인다.** Cortex-M7 은 Normal 메모리를 투기적으로
+   * 접근하므로 아무도 그 주소를 쓰지 않아도 프리페치가 닿을 수 있고, AXI 가
+   * 에러를 돌려주면 정밀하지 않은(imprecise) BusFault 가 뜬다. 원인을 짚기
+   * 대단히 어려운 종류의 폴트다.
+   *
+   * 아래 R15 주석에 QSPI 에 대해 똑같은 논리를 적어두고 정작 여기에는 적용하지
+   * 않았다. 다른 세션이 지적해서 고쳤다.
+   *
+   * 서브리전(SRD)으로는 못 맞춘다. 512KB 리전의 서브리전은 64KB 단위인데
+   * 288KB 는 4.5칸이라 경계가 안 떨어진다.
+   */
   MPU_InitStruct.Number           = MPU_REGION_NUMBER2;
   MPU_InitStruct.Enable           = MPU_REGION_ENABLE;
-  MPU_InitStruct.BaseAddress      = 0x30000000;
-  MPU_InitStruct.Size             = MPU_REGION_SIZE_512KB;
+  MPU_InitStruct.BaseAddress      = 0x30000000;                 // SRAM1 + SRAM2
+  MPU_InitStruct.Size             = MPU_REGION_SIZE_256KB;
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
   MPU_InitStruct.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
   MPU_InitStruct.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
@@ -328,6 +354,11 @@ void bspMpuInit(void)
   MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL1;             // Normal, Non-cacheable
   MPU_InitStruct.SubRegionDisable = 0x00;
   MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  MPU_InitStruct.Number           = MPU_REGION_NUMBER3;
+  MPU_InitStruct.BaseAddress      = 0x30040000;                 // SRAM3
+  MPU_InitStruct.Size             = MPU_REGION_SIZE_32KB;
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 
   /*

@@ -154,7 +154,8 @@ TEX/C/B 조합:
 |---|---|---|---|
 | 0 | `0x00000000` | 4GB | No access, XN, `SubRegionDisable=0x87` |
 | 1 | `0x24000000` | 512KB | AXI SRAM. Write-through, XN |
-| 2 | `0x30000000` | 512KB | D2 SRAM. **Non-cacheable**, XN |
+| 2 | `0x30000000` | 256KB | D2 SRAM1+2. **Non-cacheable**, XN |
+| 3 | `0x30040000` | 32KB | D2 SRAM3. 속성 동일 |
 | 15 | `0x90000000` | 16MB | QSPI. Cacheable, **실행 허용** |
 
 ### R0 의 SubRegionDisable = 0x87
@@ -163,7 +164,7 @@ TEX/C/B 조합:
 (비활성화 = 이 리전이 관여하지 않고 기본 메모리맵을 따름).
 
 - 서브리전 0 (`0x00000000~0x1FFFFFFF`) — 내부 플래시. 기본맵 그대로
-- 서브리전 1 (`0x20000000~0x3FFFFFFF`) — SRAM. 아래 R1/R2 가 덮는다
+- 서브리전 1 (`0x20000000~0x3FFFFFFF`) — SRAM. 아래 R1/R2/R3 이 덮는다
 - 서브리전 2 (`0x40000000~0x5FFFFFFF`) — 주변장치
 - 서브리전 7 (`0xE0000000~0xFFFFFFFF`) — PPB (SCB, NVIC)
 
@@ -182,10 +183,26 @@ MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;   // 실행 허용
 ## 함정
 
 - **`BaseAddress` 는 `Size` 에 정렬돼 있어야 한다.** 안 맞으면 조용히 엉뚱한 영역이 잡힌다.
-  D2 SRAM 은 실제로 288KB(SRAM1+2+3)지만 MPU 크기가 2의 거듭제곱이어야 해서 512KB 로 잡았다.
-  `0x30000000` 은 512KB 정렬이라 문제없다.
-- **`bspDeInit()` 에서 MPU 를 끄지 않는다.** 앱이 자기 `bspInit()` 에서 다시 설정하고,
-  그 전까지는 QSPI 영역이 실행 가능해야 한다. 대신 캐시는 반드시 비운다.
+
+- **실재하지 않는 주소를 Normal 메모리로 노출하면 안 된다.** D2 SRAM 은 288KB
+  (SRAM1 128K + SRAM2 128K + SRAM3 32K, `0x30000000~0x30048000`)뿐이다. MPU 크기가
+  2의 거듭제곱이라는 이유로 512KB 한 개로 잡으면 **`0x30048000~0x3007FFFF` 가 존재하지
+  않는데 Normal 로 보인다.** Cortex-M7 은 Normal 메모리를 투기적으로 접근하므로 아무도
+  그 주소를 쓰지 않아도 프리페치가 닿을 수 있고, AXI 가 에러를 돌려주면 **imprecise
+  BusFault** 가 뜬다. 원인을 짚기 대단히 어려운 종류다.
+
+  그래서 리전 두 개로 쪼갠다 — R2 = 256KB, R3 = 32KB. 서브리전으로는 못 맞춘다
+  (512KB 리전의 서브리전은 64KB 단위인데 288KB 는 4.5칸이라 경계가 안 떨어진다).
+
+  R15(QSPI) 주석에 똑같은 논리를 적어두고 정작 D2 에는 적용하지 않았다.
+  다른 세션(`hancheol-5a`)이 지적해서 고쳤다.
+
+- **`bspDeInit()` 에서 MPU 를 끄지 않는다.** QSPI 영역이 실행 가능한 채로 넘어가야
+  앱의 첫 명령어를 인출할 수 있다. 대신 캐시는 반드시 비운다.
+
+  **여기 설정이 곧 앱의 최종 메모리 속성이다.** 아두이노 코어에는 MPU 코드가 아예
+  없다(cores/variants/libraries 전부 확인). 자체 앱이 다시 잡을 수는 있지만 의무가
+  아니고 현재 아무도 하지 않는다. 이 리전 표를 바꾸면 앱이 곧바로 영향을 받는다.
 
   ```c
   SCB_CleanInvalidateDCache();
